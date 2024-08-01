@@ -38,6 +38,7 @@ sc-transaction-pool = { workspace = true }
 sc-transaction-pool-api = { workspace = true }
 sc-offchain = { workspace = true }
 sc-network = { workspace = true }
+sc-network-sync = { workspace = true }
 sc-consensus-aura = { workspace = true }
 sp-consensus-aura = { workspace = true }
 sp-consensus = { workspace = true }
@@ -57,6 +58,23 @@ sp-keyring = { workspace = true }
 frame-system = { workspace = true }
 pallet-transaction-payment = { workspace = true }
 pallet-commitments = { path = "../pallets/commitments" }
+sp-transaction-pool = { workspace = true }
+polkadot-core-primitives = { workspace = true }
+sc-consensus-manual-seal = { workspace = true }
+frame-system-rpc-runtime-api = { workspace = true }
+pallet-transaction-payment-rpc-runtime-api = { workspace = true }
+
+# Ethereum (Frontier)
+fc-api = { workspace = true }
+fc-consensus = { workspace = true }
+fc-db = { workspace = true }
+fc-mapping-sync = { workspace = true }
+fc-rpc = { workspace = true }
+fc-rpc-core = { workspace = true }
+fp-storage = { workspace = true }
+fp-rpc = { workspace = true }
+fc-storage = { workspace = true }
+fp-dynamic-fee = { workspace = true }
 
 # These dependencies are used for the subtensor's RPCs
 jsonrpsee = { workspace = true, features = ["server"] }
@@ -82,7 +100,12 @@ subtensor-custom-rpc-runtime-api = { path = "../pallets/subtensor/runtime-api" }
 substrate-build-script-utils = { workspace = true }
 
 [features]
-default = []
+default = [
+	"rocksdb",
+	"sql",
+#	"txpool",
+	"rpc-binary-search-estimate",
+]
 # Dependencies that are only required if runtime benchmarking should be build.
 runtime-benchmarks = [
 	"node-subtensor-runtime/runtime-benchmarks",
@@ -94,6 +117,19 @@ runtime-benchmarks = [
 	"pallet-commitments/runtime-benchmarks"
 ]
 pow-faucet = []
+rocksdb = [
+	"sc-cli/rocksdb",
+	"sc-service/rocksdb",
+#	"fc-cli/rocksdb",
+	"fc-db/rocksdb",
+	"fc-mapping-sync/rocksdb",
+	"fc-rpc/rocksdb",
+]
+sql = [
+	"fc-db/sql",
+	"fc-mapping-sync/sql",
+]
+rpc-binary-search-estimate = ["fc-rpc/rpc-binary-search-estimate"]
 
 # Enable features that allow the runtime to be tried and debugged. Name might be subject to change
 # in the near future.
