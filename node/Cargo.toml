@@ -92,7 +92,7 @@ substrate-build-script-utils = { workspace = true }
 
 [features]
 default = [
-#	"rocksdb",
+	"rocksdb",
 	"sql",
 #	"txpool",
 #	"rpc-binary-search-estimate",
@@ -101,7 +101,14 @@ sql = [
 	"fc-db/sql",
 #	"fc-mapping-sync/sql",
 ]
-
+rocksdb = [
+#	"sc-cli/rocksdb",
+	"sc-service/rocksdb",
+#	"fc-cli/rocksdb",
+	"fc-db/rocksdb",
+#	"fc-mapping-sync/rocksdb",
+#	"fc-rpc/rocksdb",
+]
 
 # Dependencies that are only required if runtime benchmarking should be build.
 runtime-benchmarks = [
