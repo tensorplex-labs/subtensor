@@ -17,6 +17,7 @@ use sp_runtime::traits::HashingFor;
 use node_subtensor_runtime::Block;
 use sc_cli::SubstrateCli;
 use sc_service::{Configuration, PartialComponents};
+use futures::TryFutureExt;
 
 impl SubstrateCli for Cli {
     fn impl_name() -> String {
@@ -239,6 +240,7 @@ pub fn run() -> sc_cli::Result<()> {
                     cli.eth,
                     cli.sealing
                 ).map_err(Into::into)
+                .await
             })
         },
     }

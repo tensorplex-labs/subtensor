@@ -75,12 +75,18 @@ frame-benchmarking-cli = { workspace = true }
 
 # Needed for Frontier
 sc-consensus-manual-seal = { workspace = true }
+sc-network-sync = { workspace = true }
 
 # Frontier
 fc-storage = { workspace = true }
 fc-db = { workspace = true }
 fc-consensus = { workspace = true }
 fp-dynamic-fee = { workspace = true }
+fc-api = { workspace = true }
+fc-rpc = { workspace = true }
+fc-rpc-core = { workspace = true }
+fp-rpc = { workspace = true }
+fc-mapping-sync = { workspace = true }
 
 # Local Dependencies
 node-subtensor-runtime = { path = "../runtime" }
@@ -99,14 +105,14 @@ default = [
 ]
 sql = [
 	"fc-db/sql",
-#	"fc-mapping-sync/sql",
+	"fc-mapping-sync/sql",
 ]
 rocksdb = [
 #	"sc-cli/rocksdb",
 	"sc-service/rocksdb",
 #	"fc-cli/rocksdb",
 	"fc-db/rocksdb",
-#	"fc-mapping-sync/rocksdb",
+	"fc-mapping-sync/rocksdb",
 #	"fc-rpc/rocksdb",
 ]
 

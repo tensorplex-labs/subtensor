@@ -5,15 +5,26 @@
 
 #![warn(missing_docs)]
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
+use futures::channel::mpsc;
 use jsonrpsee::RpcModule;
 use node_subtensor_runtime::{opaque::Block, AccountId, Balance, BlockNumber, Hash, Index};
 use sc_consensus_grandpa::FinalityProofProvider;
+use sc_consensus_manual_seal::EngineCommand;
+use sc_network::service::traits::NetworkService;
+use sc_network_sync::SyncingService;
 use sc_transaction_pool_api::TransactionPool;
 use sp_api::ProvideRuntimeApi;
 use sp_block_builder::BlockBuilder;
 use sp_blockchain::{Error as BlockChainError, HeaderBackend, HeaderMetadata};
+use sp_runtime::traits::Block as BlockT;
+use sc_transaction_pool::{ChainApi, Pool};
+use fc_storage::StorageOverride;
+pub use fc_rpc::{EthBlockDataCacheTask, EthConfig};
+pub use fc_rpc_core::types::{FeeHistoryCache, FeeHistoryCacheLimit, FilterPool};
+use sp_core::H256;
+use sp_inherents::CreateInherentDataProviders;
 
 pub use sc_rpc_api::DenyUnsafe;
 
@@ -31,8 +42,49 @@ pub struct GrandpaDeps<B> {
     pub finality_provider: Arc<FinalityProofProvider<B, Block>>,
 }
 
+/// Extra dependencies for Ethereum compatibility.
+pub struct EthDeps<B: BlockT, C, P, A: ChainApi, CT, CIDP> {
+	/// The client instance to use.
+	pub client: Arc<C>,
+	/// Transaction pool instance.
+	pub pool: Arc<P>,
+	/// Graph pool instance.
+	pub graph: Arc<Pool<A>>,
+	/// Ethereum transaction converter.
+	pub converter: Option<CT>,
+	/// The Node authority flag
+	pub is_authority: bool,
+	/// Whether to enable dev signer
+	pub enable_dev_signer: bool,
+	/// Network service
+	pub network: Arc<dyn NetworkService>,
+	/// Chain syncing service
+	pub sync: Arc<SyncingService<B>>,
+	/// Frontier Backend.
+	pub frontier_backend: Arc<dyn fc_api::Backend<B>>,
+	/// Ethereum data access overrides.
+	pub storage_override: Arc<dyn StorageOverride<B>>,
+	/// Cache for Ethereum block data.
+	pub block_data_cache: Arc<EthBlockDataCacheTask<B>>,
+	/// EthFilterApi pool.
+	pub filter_pool: Option<FilterPool>,
+	/// Maximum number of logs in a query.
+	pub max_past_logs: u32,
+	/// Fee history cache.
+	pub fee_history_cache: FeeHistoryCache,
+	/// Maximum fee history cache size.
+	pub fee_history_cache_limit: FeeHistoryCacheLimit,
+	/// Maximum allowed gas limit will be ` block.gas_limit * execute_gas_limit_multiplier` when
+	/// using eth_call/eth_estimateGas.
+	pub execute_gas_limit_multiplier: u64,
+	/// Mandated parent hashes for a given block hash.
+	pub forced_parent_hashes: Option<BTreeMap<H256, H256>>,
+	/// Something that can create the inherent data providers for pending state
+	pub pending_create_inherent_data_providers: CIDP,
+}
+
 /// Full client dependencies.
-pub struct FullDeps<C, P, B> {
+pub struct FullDeps<C, P, B, A: ChainApi, CT, CIDP> {
     /// The client instance to use.
     pub client: Arc<C>,
     /// Transaction pool instance.
@@ -43,11 +95,15 @@ pub struct FullDeps<C, P, B> {
     pub grandpa: GrandpaDeps<B>,
     /// Backend used by the node.
     pub _backend: Arc<B>,
+	/// Manual seal command sink
+	pub command_sink: Option<mpsc::Sender<EngineCommand<Hash>>>,
+	/// Ethereum-compatibility specific dependencies.
+	pub eth: EthDeps<Block, C, P, A, CT, CIDP>,    
 }
 
 /// Instantiate all full RPC extensions.
-pub fn create_full<C, P, B>(
-    deps: FullDeps<C, P, B>,
+pub fn create_full<C, P, B, A, CT, CIDP>(
+    deps: FullDeps<C, P, B, A, CT, CIDP>,
 ) -> Result<RpcModule<()>, Box<dyn std::error::Error + Send + Sync>>
 where
     C: ProvideRuntimeApi<Block>,
@@ -62,6 +118,9 @@ where
     C::Api: subtensor_custom_rpc_runtime_api::SubnetRegistrationRuntimeApi<Block>,
     B: sc_client_api::Backend<Block> + Send + Sync + 'static,
     P: TransactionPool + 'static,
+    A: ChainApi<Block = Block> + 'static,
+	CIDP: CreateInherentDataProviders<Block, ()> + Send + 'static,
+	CT: fp_rpc::ConvertTransaction<<Block as BlockT>::Extrinsic> + Send + Sync + 'static,    
 {
     use pallet_transaction_payment_rpc::{TransactionPayment, TransactionPaymentApiServer};
     use sc_consensus_grandpa_rpc::{Grandpa, GrandpaApiServer};
@@ -75,6 +134,8 @@ where
         deny_unsafe,
         grandpa,
         _backend: _,
+		command_sink,
+		eth,        
     } = deps;
 
     // Custom RPC methods for Paratensor

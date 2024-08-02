@@ -1,7 +1,7 @@
 //! Service and ServiceFactory implementation. Specialized wrapper over substrate service.
 
-use futures::FutureExt;
-use node_subtensor_runtime::{opaque::Block, RuntimeApi};
+use futures::{channel::mpsc, FutureExt};
+use node_subtensor_runtime::{opaque::Block, RuntimeApi, TransactionConverter};
 use sc_client_api::{Backend, BlockBackend};
 use sc_consensus::BasicQueue;
 use sc_consensus_aura::{SlotProportion, StartAuraParams};
@@ -19,7 +19,8 @@ use sp_core::U256;
 use std::path::Path;
 
 use crate::ethereum::{ 
-    FrontierBackend, StorageOverride, StorageOverrideHandler, EthConfiguration, FrontierBlockImport, BackendType, db_config_dir 
+    FrontierBackend, StorageOverride, StorageOverrideHandler, EthConfiguration, FrontierBlockImport, BackendType, db_config_dir,
+    FrontierPartialComponents, new_frontier_partial, spawn_frontier_tasks
 };
 use crate::cli::Sealing;
 
@@ -67,7 +68,7 @@ impl sc_executor::NativeExecutionDispatch for ExecutorDispatch {
 
 pub(crate) type FullClient =
     sc_service::TFullClient<Block, RuntimeApi, NativeElseWasmExecutor<ExecutorDispatch>>;
-type FullBackend = sc_service::TFullBackend<Block>;
+pub type FullBackend = sc_service::TFullBackend<Block>;
 type FullSelectChain = sc_consensus::LongestChain<FullBackend, Block>;
 
 type BoxBlockImport = sc_consensus::BoxBlockImport<Block>;
@@ -282,10 +283,10 @@ where
 }
 
 // Builds a new service for a full client.
-pub fn new_full<
+pub async fn new_full<
 	N: sc_network::NetworkBackend<Block, <Block as sp_runtime::traits::Block>::Hash>,
 >(
-	config: Configuration,
+	mut config: Configuration,
 	eth_config: EthConfiguration,
 	sealing: Option<Sealing>,
 ) -> Result<TaskManager, ServiceError> {
@@ -307,10 +308,16 @@ pub fn new_full<
             block_import,
             grandpa_link,
             mut telemetry,
-            _frontier_backend,
-            _storage_override,
+            frontier_backend,
+            storage_override,
         ),
     } = new_partial(&config, &eth_config, build_import_queue)?;
+
+	let FrontierPartialComponents {
+		filter_pool,
+		fee_history_cache,
+		fee_history_cache_limit,
+	} = new_frontier_partial(&eth_config)?;
 
 	let mut net_config = sc_network::config::FullNetworkConfiguration::<
 		Block,
@@ -397,13 +404,87 @@ pub fn new_full<
     let name = config.network.node_name.clone();
     let enable_grandpa = !config.disable_grandpa;
     let prometheus_registry = config.prometheus_registry().cloned();
+    let frontier_backend = Arc::new(frontier_backend);
+
+	// Channel for the rpc handler to communicate with the authorship task.
+	let (command_sink, commands_stream) = mpsc::channel(1000);
+
+	// Sinks for pubsub notifications.
+	// Everytime a new subscription is created, a new mpsc channel is added to the sink pool.
+	// The MappingSyncWorker sends through the channel on block import and the subscription emits a notification to the subscriber on receiving a message through this channel.
+	// This way we avoid race conditions when using native substrate block import notification stream.
+	let pubsub_notification_sinks: fc_mapping_sync::EthereumBlockNotificationSinks<
+		fc_mapping_sync::EthereumBlockNotification<Block>,
+	> = Default::default();
+	let pubsub_notification_sinks = Arc::new(pubsub_notification_sinks);
+
+	// for ethereum-compatibility rpc.
+	config.rpc_id_provider = Some(Box::new(fc_rpc::EthereumSubIdProvider));
 
     let rpc_extensions_builder = {
         let client = client.clone();
         let pool = transaction_pool.clone();
 
+		let network = network.clone();
+		let sync_service = sync_service.clone();
+
+		let is_authority = role.is_authority();
+		let enable_dev_signer = eth_config.enable_dev_signer;
+		let max_past_logs = eth_config.max_past_logs;
+		let execute_gas_limit_multiplier = eth_config.execute_gas_limit_multiplier;
+		let filter_pool = filter_pool.clone();
+		let frontier_backend = frontier_backend.clone();
+		let pubsub_notification_sinks = pubsub_notification_sinks.clone();
+		let storage_override = storage_override.clone();
+		let fee_history_cache = fee_history_cache.clone();
+		let block_data_cache = Arc::new(fc_rpc::EthBlockDataCacheTask::new(
+			task_manager.spawn_handle(),
+			storage_override.clone(),
+			eth_config.eth_log_block_cache,
+			eth_config.eth_statuses_cache,
+			prometheus_registry.clone(),
+		));
+
+		let slot_duration = sc_consensus_aura::slot_duration(&*client)?;
+		let target_gas_price = eth_config.target_gas_price;
+		let pending_create_inherent_data_providers = move |_, ()| async move {
+			let current = sp_timestamp::InherentDataProvider::from_system_time();
+			let next_slot = current.timestamp().as_millis() + slot_duration.as_millis();
+			let timestamp = sp_timestamp::InherentDataProvider::new(next_slot.into());
+			let slot = sp_consensus_aura::inherents::InherentDataProvider::from_timestamp_and_slot_duration(
+				*timestamp,
+				slot_duration,
+			);
+			let dynamic_fee = fp_dynamic_fee::InherentDataProvider(U256::from(target_gas_price));
+			Ok((slot, timestamp, dynamic_fee))
+		};
+
         Box::new(
             move |deny_unsafe, subscription_executor: sc_rpc::SubscriptionTaskExecutor| {
+                let eth_deps = crate::rpc::EthDeps {
+                    client: client.clone(),
+                    pool: pool.clone(),
+                    graph: pool.pool().clone(),
+                    converter: Some(TransactionConverter),
+                    is_authority,
+                    enable_dev_signer,
+                    network: network.clone(),
+                    sync: sync_service.clone(),
+                    frontier_backend: match &*frontier_backend {
+                        fc_db::Backend::KeyValue(b) => b.clone(),
+                        fc_db::Backend::Sql(b) => b.clone(),
+                    },
+                    storage_override: storage_override.clone(),
+                    block_data_cache: block_data_cache.clone(),
+                    filter_pool: filter_pool.clone(),
+                    max_past_logs,
+                    fee_history_cache: fee_history_cache.clone(),
+                    fee_history_cache_limit,
+                    execute_gas_limit_multiplier,
+                    forced_parent_hashes: None,
+                    pending_create_inherent_data_providers,
+                };
+
                 let deps = crate::rpc::FullDeps {
                     client: client.clone(),
                     pool: pool.clone(),
@@ -416,6 +497,12 @@ pub fn new_full<
                         finality_provider: finality_proof_provider.clone(),
                     },
                     _backend: rpc_backend.clone(),
+                    command_sink: if sealing.is_some() {
+                        Some(command_sink.clone())
+                    } else {
+                        None
+                    },
+                    eth: eth_deps,
                 };
                 crate::rpc::create_full(deps).map_err(Into::into)
             },
@@ -429,13 +516,27 @@ pub fn new_full<
         task_manager: &mut task_manager,
         transaction_pool: transaction_pool.clone(),
         rpc_builder: rpc_extensions_builder,
-        backend,
+        backend: backend.clone(),
         system_rpc_tx,
         tx_handler_controller,
         sync_service: sync_service.clone(),
         config,
         telemetry: telemetry.as_mut(),
     })?;
+
+	spawn_frontier_tasks(
+		&task_manager,
+		client.clone(),
+		backend,
+		frontier_backend,
+		filter_pool,
+		storage_override,
+		fee_history_cache,
+		fee_history_cache_limit,
+		sync_service.clone(),
+		pubsub_notification_sinks,
+	)
+	.await;
 
     if role.is_authority() {
         let proposer_factory = sc_basic_authorship::ProposerFactory::new(

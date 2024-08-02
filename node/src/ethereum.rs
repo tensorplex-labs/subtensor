@@ -1,12 +1,21 @@
+use std::{collections::BTreeMap, sync::{Arc, Mutex}};
 use std::path::PathBuf;
-use sc_service::Configuration;
+use std::time::Duration;
+use sc_network_sync::SyncingService;
+use sc_service::{error::Error as ServiceError, Configuration, TaskManager};
+use futures::future;
+use fc_rpc::EthTask;
+use sc_client_api::BlockchainEvents;
+use futures::StreamExt;
 
 /// Frontier DB backend type.
 pub use fc_storage::{StorageOverride, StorageOverrideHandler};
 pub use fc_consensus::FrontierBlockImport;
-
+pub use fc_rpc_core::types::{FeeHistoryCache, FeeHistoryCacheLimit, FilterPool};
 
 use node_subtensor_runtime::opaque::Block;
+
+use crate::service::{FullBackend, FullClient};
 
 pub type FrontierBackend<C> = fc_db::Backend<Block, C>;
 
@@ -75,4 +84,108 @@ pub struct EthConfiguration {
 
 pub fn db_config_dir(config: &Configuration) -> PathBuf {
 	config.base_path.config_dir(config.chain_spec.id())
+}
+
+pub struct FrontierPartialComponents {
+	pub filter_pool: Option<FilterPool>,
+	pub fee_history_cache: FeeHistoryCache,
+	pub fee_history_cache_limit: FeeHistoryCacheLimit,
+}
+
+pub fn new_frontier_partial(
+	config: &EthConfiguration,
+) -> Result<FrontierPartialComponents, ServiceError> {
+	Ok(FrontierPartialComponents {
+		filter_pool: Some(Arc::new(Mutex::new(BTreeMap::new()))),
+		fee_history_cache: Arc::new(Mutex::new(BTreeMap::new())),
+		fee_history_cache_limit: config.fee_history_limit,
+	})
+}
+
+pub async fn spawn_frontier_tasks(
+	task_manager: &TaskManager,
+	client: Arc<FullClient>,
+	backend: Arc<FullBackend>,
+	frontier_backend: Arc<FrontierBackend<FullClient>>,
+	filter_pool: Option<FilterPool>,
+	storage_override: Arc<dyn StorageOverride<Block>>,
+	fee_history_cache: FeeHistoryCache,
+	fee_history_cache_limit: FeeHistoryCacheLimit,
+	sync: Arc<SyncingService<Block>>,
+	pubsub_notification_sinks: Arc<
+		fc_mapping_sync::EthereumBlockNotificationSinks<
+			fc_mapping_sync::EthereumBlockNotification<Block>,
+		>,
+	>,
+) // where
+	// RuntimeApi: ConstructRuntimeApi<Block, FullClient>,
+	// RuntimeApi: Send + Sync + 'static,
+	// RuntimeApi::RuntimeApi: EthCompatRuntimeApiCollection,
+	// Executor: NativeExecutionDispatch + 'static,
+{
+	// Spawn main mapping sync worker background task.
+	match &*frontier_backend {
+		fc_db::Backend::KeyValue(b) => {
+			task_manager.spawn_essential_handle().spawn(
+				"frontier-mapping-sync-worker",
+				Some("frontier"),
+				fc_mapping_sync::kv::MappingSyncWorker::new(
+					client.import_notification_stream(),
+					Duration::new(6, 0),
+					client.clone(),
+					backend,
+					storage_override.clone(),
+					b.clone(),
+					3,
+					0,
+					fc_mapping_sync::SyncStrategy::Normal,
+					sync,
+					pubsub_notification_sinks,
+				)
+				.for_each(|()| future::ready(())),
+			);
+		}
+		fc_db::Backend::Sql(b) => {
+			task_manager.spawn_essential_handle().spawn_blocking(
+				"frontier-mapping-sync-worker",
+				Some("frontier"),
+				fc_mapping_sync::sql::SyncWorker::run(
+					client.clone(),
+					backend,
+					b.clone(),
+					client.import_notification_stream(),
+					fc_mapping_sync::sql::SyncWorkerConfig {
+						read_notification_timeout: Duration::from_secs(30),
+						check_indexed_blocks_interval: Duration::from_secs(60),
+					},
+					fc_mapping_sync::SyncStrategy::Parachain,
+					sync,
+					pubsub_notification_sinks,
+				),
+			);
+		}
+	}
+
+	// Spawn Frontier EthFilterApi maintenance task.
+	if let Some(filter_pool) = filter_pool {
+		// Each filter is allowed to stay in the pool for 100 blocks.
+		const FILTER_RETAIN_THRESHOLD: u64 = 100;
+		task_manager.spawn_essential_handle().spawn(
+			"frontier-filter-pool",
+			Some("frontier"),
+			EthTask::filter_pool_task(client.clone(), filter_pool, FILTER_RETAIN_THRESHOLD),
+		);
+	}
+
+	// Spawn Frontier FeeHistory cache maintenance task.
+	task_manager.spawn_essential_handle().spawn(
+		"frontier-fee-history",
+		Some("frontier"),
+		EthTask::fee_history_task(
+			client,
+			storage_override,
+			fee_history_cache,
+			fee_history_cache_limit,
+		),
+	);
 }
