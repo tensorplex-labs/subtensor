@@ -73,6 +73,15 @@ pallet-transaction-payment-rpc = { workspace = true }
 frame-benchmarking = { workspace = true }
 frame-benchmarking-cli = { workspace = true }
 
+# Needed for Frontier
+sc-consensus-manual-seal = { workspace = true }
+
+# Frontier
+fc-storage = { workspace = true }
+fc-db = { workspace = true }
+fc-consensus = { workspace = true }
+fp-dynamic-fee = { workspace = true }
+
 # Local Dependencies
 node-subtensor-runtime = { path = "../runtime" }
 subtensor-custom-rpc = { path = "../pallets/subtensor/rpc" }
@@ -82,7 +91,18 @@ subtensor-custom-rpc-runtime-api = { path = "../pallets/subtensor/runtime-api" }
 substrate-build-script-utils = { workspace = true }
 
 [features]
-default = []
+default = [
+#	"rocksdb",
+	"sql",
+#	"txpool",
+#	"rpc-binary-search-estimate",
+]
+sql = [
+	"fc-db/sql",
+#	"fc-mapping-sync/sql",
+]
+
+
 # Dependencies that are only required if runtime benchmarking should be build.
 runtime-benchmarks = [
 	"node-subtensor-runtime/runtime-benchmarks",

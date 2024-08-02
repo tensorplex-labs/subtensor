@@ -3,20 +3,33 @@
 use futures::FutureExt;
 use node_subtensor_runtime::{opaque::Block, RuntimeApi};
 use sc_client_api::{Backend, BlockBackend};
-use sc_consensus_aura::{ImportQueueParams, SlotProportion, StartAuraParams};
+use sc_consensus::BasicQueue;
+use sc_consensus_aura::{SlotProportion, StartAuraParams};
 use sc_consensus_grandpa::SharedVoterState;
 use sc_consensus_slots::BackoffAuthoringOnFinalizedHeadLagging;
 use sc_executor::sp_wasm_interface::{Function, HostFunctionRegistry, HostFunctions};
 pub use sc_executor::NativeElseWasmExecutor;
+use sc_service::PartialComponents;
 use sc_service::{error::Error as ServiceError, Configuration, TaskManager, WarpSyncParams};
-use sc_telemetry::{Telemetry, TelemetryWorker};
+use sc_telemetry::{Telemetry, TelemetryHandle, TelemetryWorker};
 use sc_transaction_pool_api::OffchainTransactionPoolFactory;
 use sp_consensus_aura::sr25519::AuthorityPair as AuraPair;
 use std::{sync::Arc, time::Duration};
+use sp_core::U256;
+use std::path::Path;
+
+use crate::ethereum::{ 
+    FrontierBackend, StorageOverride, StorageOverrideHandler, EthConfiguration, FrontierBlockImport, BackendType, db_config_dir 
+};
+use crate::cli::Sealing;
 
 /// The minimum period of blocks on which justifications will be
 /// imported and generated.
 const GRANDPA_JUSTIFICATION_PERIOD: u32 = 512;
+
+type BasicImportQueue = sc_consensus::DefaultImportQueue<Block>;
+type GrandpaBlockImport<Client> =
+	sc_consensus_grandpa::GrandpaBlockImport<FullBackend, Block, Client, FullSelectChain>;
 
 // Our native executor instance.
 pub struct ExecutorDispatch;
@@ -57,28 +70,39 @@ pub(crate) type FullClient =
 type FullBackend = sc_service::TFullBackend<Block>;
 type FullSelectChain = sc_consensus::LongestChain<FullBackend, Block>;
 
-pub fn new_partial(
+type BoxBlockImport = sc_consensus::BoxBlockImport<Block>;
+
+pub fn new_partial<BIQ>(
     config: &Configuration,
+    eth_config: &EthConfiguration,
+	build_import_queue: BIQ,    
 ) -> Result<
     sc_service::PartialComponents<
         FullClient,
         FullBackend,
         FullSelectChain,
-        sc_consensus::DefaultImportQueue<Block>,
+        BasicImportQueue,
         sc_transaction_pool::FullPool<Block, FullClient>,
         (
-            sc_consensus_grandpa::GrandpaBlockImport<
-                FullBackend,
-                Block,
-                FullClient,
-                FullSelectChain,
-            >,
+            BoxBlockImport,
             sc_consensus_grandpa::LinkHalf<Block, FullClient, FullSelectChain>,
             Option<Telemetry>,
+            FrontierBackend<FullClient>,
+            Arc<dyn StorageOverride<Block>>,
         ),
     >,
     ServiceError,
-> {
+> 
+where
+    BIQ: FnOnce(
+        Arc<FullClient>,
+        &Configuration,
+        &EthConfiguration,
+        &TaskManager,
+        Option<TelemetryHandle>,
+        GrandpaBlockImport<FullClient>,
+    ) -> Result<(BasicImportQueue, BoxBlockImport), ServiceError>,
+{
     let telemetry = config
         .telemetry_endpoints
         .clone()
@@ -125,30 +149,44 @@ pub fn new_partial(
         telemetry.as_ref().map(|x| x.handle()),
     )?;
 
-    let slot_duration = sc_consensus_aura::slot_duration(&*client)?;
+	let (import_queue, block_import) = build_import_queue(
+		client.clone(),
+		config,
+		eth_config,
+		&task_manager,
+		telemetry.as_ref().map(|x| x.handle()),
+		grandpa_block_import,
+	)?;
 
-    let import_queue =
-        sc_consensus_aura::import_queue::<AuraPair, _, _, _, _, _>(ImportQueueParams {
-            block_import: grandpa_block_import.clone(),
-            justification_import: Some(Box::new(grandpa_block_import.clone())),
-            client: client.clone(),
-            create_inherent_data_providers: move |_, ()| async move {
-                let timestamp = sp_timestamp::InherentDataProvider::from_system_time();
-
-                let slot =
-					sp_consensus_aura::inherents::InherentDataProvider::from_timestamp_and_slot_duration(
-						*timestamp,
-						slot_duration,
-					);
-
-                Ok((slot, timestamp))
-            },
-            spawner: &task_manager.spawn_essential_handle(),
-            registry: config.prometheus_registry(),
-            check_for_equivocation: Default::default(),
-            telemetry: telemetry.as_ref().map(|x| x.handle()),
-            compatibility_mode: Default::default(),
-        })?;
+    let storage_override = Arc::new(StorageOverrideHandler::new(client.clone()));
+	let frontier_backend = match eth_config.frontier_backend_type {
+		BackendType::KeyValue => FrontierBackend::KeyValue(Arc::new(fc_db::kv::Backend::open(
+			Arc::clone(&client),
+			&config.database,
+			&db_config_dir(config),
+		)?)),
+		BackendType::Sql => {
+			let db_path = db_config_dir(config).join("sql");
+			std::fs::create_dir_all(&db_path).expect("failed creating sql db directory");
+			let backend = futures::executor::block_on(fc_db::sql::Backend::new(
+				fc_db::sql::BackendConfig::Sqlite(fc_db::sql::SqliteBackendConfig {
+					path: Path::new("sqlite:///")
+						.join(db_path)
+						.join("frontier.db3")
+						.to_str()
+						.unwrap(),
+					create_if_missing: true,
+					thread_count: eth_config.frontier_sql_backend_thread_count,
+					cache_size: eth_config.frontier_sql_backend_cache_size,
+				}),
+				eth_config.frontier_sql_backend_pool_size,
+				std::num::NonZeroU32::new(eth_config.frontier_sql_backend_num_ops_timeout),
+				storage_override.clone(),
+			))
+			.unwrap_or_else(|err| panic!("failed creating sql backend: {:?}", err));
+			FrontierBackend::Sql(Arc::new(backend))
+		}
+	};
 
     Ok(sc_service::PartialComponents {
         client,
@@ -158,8 +196,89 @@ pub fn new_partial(
         keystore_container,
         select_chain,
         transaction_pool,
-        other: (grandpa_block_import, grandpa_link, telemetry),
+        other: (
+            block_import,
+            grandpa_link,
+            telemetry,
+            frontier_backend,
+            storage_override,
+        ),
     })
+}
+
+/// Build the import queue for the template runtime (aura + grandpa).
+pub fn build_aura_grandpa_import_queue(
+	client: Arc<FullClient>,
+	config: &Configuration,
+	eth_config: &EthConfiguration,
+	task_manager: &TaskManager,
+	telemetry: Option<TelemetryHandle>,
+	grandpa_block_import: GrandpaBlockImport<FullClient>,
+) -> Result<(BasicImportQueue, BoxBlockImport), ServiceError>
+// where
+// 	RuntimeApi: ConstructRuntimeApi<Block, FullClient>,
+// 	RuntimeApi: Send + Sync + 'static,
+// 	RuntimeApi::RuntimeApi: RuntimeApiCollection,
+// 	Executor: NativeExecutionDispatch + 'static,
+{
+	let frontier_block_import =
+		FrontierBlockImport::new(grandpa_block_import.clone(), client.clone());
+
+	let slot_duration = sc_consensus_aura::slot_duration(&*client)?;
+	let target_gas_price = eth_config.target_gas_price;
+	let create_inherent_data_providers = move |_, ()| async move {
+		let timestamp = sp_timestamp::InherentDataProvider::from_system_time();
+		let slot =
+			sp_consensus_aura::inherents::InherentDataProvider::from_timestamp_and_slot_duration(
+				*timestamp,
+				slot_duration,
+			);
+		let dynamic_fee = fp_dynamic_fee::InherentDataProvider(U256::from(target_gas_price));
+		Ok((slot, timestamp, dynamic_fee))
+	};
+
+	let import_queue = sc_consensus_aura::import_queue::<AuraPair, _, _, _, _, _>(
+		sc_consensus_aura::ImportQueueParams {
+			block_import: frontier_block_import.clone(),
+			justification_import: Some(Box::new(grandpa_block_import)),
+			client,
+			create_inherent_data_providers,
+			spawner: &task_manager.spawn_essential_handle(),
+			registry: config.prometheus_registry(),
+			check_for_equivocation: Default::default(),
+			telemetry,
+			compatibility_mode: sc_consensus_aura::CompatibilityMode::None,
+		},
+	)
+	.map_err::<ServiceError, _>(Into::into)?;
+
+	Ok((import_queue, Box::new(frontier_block_import)))
+}
+
+/// Build the import queue for the template runtime (manual seal).
+pub fn build_manual_seal_import_queue(
+	client: Arc<FullClient>,
+	config: &Configuration,
+	_eth_config: &EthConfiguration,
+	task_manager: &TaskManager,
+	_telemetry: Option<TelemetryHandle>,
+	_grandpa_block_import: GrandpaBlockImport<FullClient>,
+) -> Result<(BasicImportQueue, BoxBlockImport), ServiceError>
+where
+	// RuntimeApi: ConstructRuntimeApi<Block, FullClient>,
+	// RuntimeApi: Send + Sync + 'static,
+	// RuntimeApi::RuntimeApi: RuntimeApiCollection,
+	// Executor: NativeExecutionDispatch + 'static,
+{
+	let frontier_block_import = FrontierBlockImport::new(client.clone(), client);
+	Ok((
+		sc_consensus_manual_seal::import_queue(
+			Box::new(frontier_block_import.clone()),
+			&task_manager.spawn_essential_handle(),
+			config.prometheus_registry(),
+		),
+		Box::new(frontier_block_import),
+	))
 }
 
 // Builds a new service for a full client.
@@ -167,7 +286,15 @@ pub fn new_full<
 	N: sc_network::NetworkBackend<Block, <Block as sp_runtime::traits::Block>::Hash>,
 >(
 	config: Configuration,
+	eth_config: EthConfiguration,
+	sealing: Option<Sealing>,
 ) -> Result<TaskManager, ServiceError> {
+	let build_import_queue = if sealing.is_some() {
+		build_manual_seal_import_queue
+	} else {
+		build_aura_grandpa_import_queue
+	};
+
     let sc_service::PartialComponents {
         client,
         backend,
@@ -176,8 +303,14 @@ pub fn new_full<
         keystore_container,
         select_chain,
         transaction_pool,
-        other: (block_import, grandpa_link, mut telemetry),
-    } = new_partial(&config)?;
+        other: (
+            block_import,
+            grandpa_link,
+            mut telemetry,
+            _frontier_backend,
+            _storage_override,
+        ),
+    } = new_partial(&config, &eth_config, build_import_queue)?;
 
 	let mut net_config = sc_network::config::FullNetworkConfiguration::<
 		Block,
@@ -403,4 +536,33 @@ pub fn new_full<
 
     network_starter.start_network();
     Ok(task_manager)
+}
+
+pub fn new_chain_ops(
+	config: &mut Configuration,
+	eth_config: &EthConfiguration,
+) -> Result<
+	(
+		Arc<FullClient>,
+		Arc<FullBackend>,
+		BasicQueue<Block>,
+		TaskManager,
+		FrontierBackend<FullClient>,
+	),
+	ServiceError,
+> {
+	config.keystore = sc_service::config::KeystoreConfig::InMemory;
+	let PartialComponents {
+		client,
+		backend,
+		import_queue,
+		task_manager,
+		other,
+		..
+	} = new_partial::<_>(
+		config,
+		eth_config,
+		build_aura_grandpa_import_queue,
+	)?;
+	Ok((client, backend, import_queue, task_manager, other.3))
 }
