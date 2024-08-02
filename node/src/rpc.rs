@@ -7,26 +7,36 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
+use fp_rpc::{ConvertTransactionRuntimeApi, EthereumRuntimeRPCApi};
 use futures::channel::mpsc;
 use jsonrpsee::RpcModule;
-use node_subtensor_runtime::{opaque::Block, AccountId, Balance, BlockNumber, Hash, Index};
+use node_subtensor_runtime::{opaque::Block, AccountId, Balance, BlockNumber, Hash, Index, Nonce};
 use sc_consensus_grandpa::FinalityProofProvider;
 use sc_consensus_manual_seal::EngineCommand;
 use sc_network::service::traits::NetworkService;
 use sc_network_sync::SyncingService;
 use sc_transaction_pool_api::TransactionPool;
-use sp_api::ProvideRuntimeApi;
+use sp_api::{CallApiAt, ProvideRuntimeApi};
 use sp_block_builder::BlockBuilder;
 use sp_blockchain::{Error as BlockChainError, HeaderBackend, HeaderMetadata};
-use sp_runtime::traits::Block as BlockT;
+use sp_runtime::{traits::{BlakeTwo256, Block as BlockT}, OpaqueExtrinsic};
 use sc_transaction_pool::{ChainApi, Pool};
 use fc_storage::StorageOverride;
 pub use fc_rpc::{EthBlockDataCacheTask, EthConfig};
 pub use fc_rpc_core::types::{FeeHistoryCache, FeeHistoryCacheLimit, FilterPool};
 use sp_core::H256;
 use sp_inherents::CreateInherentDataProviders;
-
+use sc_rpc::SubscriptionTaskExecutor;
 pub use sc_rpc_api::DenyUnsafe;
+use sc_client_api::{
+	backend::{Backend, StorageProvider},
+	client::BlockchainEvents,
+	AuxStore, UsageProvider,
+};
+use sp_consensus_aura::AuraApi;
+use sp_consensus_aura::sr25519::AuthorityId as AuraId;
+
+use crate::ethereum::create_eth;
 
 /// Dependencies for GRANDPA
 pub struct GrandpaDeps<B> {
@@ -83,18 +93,26 @@ pub struct EthDeps<B: BlockT, C, P, A: ChainApi, CT, CIDP> {
 	pub pending_create_inherent_data_providers: CIDP,
 }
 
+pub struct DefaultEthConfig<C, BE>(std::marker::PhantomData<(C, BE)>);
+
+impl<C, BE> fc_rpc::EthConfig<Block, C> for DefaultEthConfig<C, BE>
+where
+	C: StorageProvider<Block, BE> + Sync + Send + 'static,
+	BE: Backend<Block> + 'static,
+{
+	type EstimateGasAdapter = ();
+	type RuntimeStorageOverride =
+		fc_rpc::frontier_backend_client::SystemAccountId20StorageOverride<Block, C, BE>;
+}
+
 /// Full client dependencies.
-pub struct FullDeps<C, P, B, A: ChainApi, CT, CIDP> {
+pub struct FullDeps<C, P, A: ChainApi, CT, CIDP> {
     /// The client instance to use.
     pub client: Arc<C>,
     /// Transaction pool instance.
     pub pool: Arc<P>,
     /// Whether to deny unsafe calls
     pub deny_unsafe: DenyUnsafe,
-    /// Grandpa block import setup.
-    pub grandpa: GrandpaDeps<B>,
-    /// Backend used by the node.
-    pub _backend: Arc<B>,
 	/// Manual seal command sink
 	pub command_sink: Option<mpsc::Sender<EngineCommand<Hash>>>,
 	/// Ethereum-compatibility specific dependencies.
@@ -102,38 +120,45 @@ pub struct FullDeps<C, P, B, A: ChainApi, CT, CIDP> {
 }
 
 /// Instantiate all full RPC extensions.
-pub fn create_full<C, P, B, A, CT, CIDP>(
-    deps: FullDeps<C, P, B, A, CT, CIDP>,
+pub fn create_full<C, P, BE, A, CT, CIDP>(
+    deps: FullDeps<C, P, A, CT, CIDP>,
+    subscription_task_executor: SubscriptionTaskExecutor,
+    pubsub_notification_sinks: Arc<
+        fc_mapping_sync::EthereumBlockNotificationSinks<
+            fc_mapping_sync::EthereumBlockNotification<Block>,
+        >,
+    >,
 ) -> Result<RpcModule<()>, Box<dyn std::error::Error + Send + Sync>>
 where
-    C: ProvideRuntimeApi<Block>,
-    C: HeaderBackend<Block> + HeaderMetadata<Block, Error = BlockChainError> + 'static,
-    C: Send + Sync + 'static,
-    C::Api: substrate_frame_rpc_system::AccountNonceApi<Block, AccountId, Index>,
+    C: CallApiAt<Block> + ProvideRuntimeApi<Block>,
+    C::Api: sp_block_builder::BlockBuilder<Block>,
+    C::Api: sp_consensus_aura::AuraApi<Block, AuraId>,
+    C::Api: substrate_frame_rpc_system::AccountNonceApi<Block, AccountId, Nonce>,
     C::Api: pallet_transaction_payment_rpc::TransactionPaymentRuntimeApi<Block, Balance>,
-    C::Api: BlockBuilder<Block>,
+    C::Api: fp_rpc::ConvertTransactionRuntimeApi<Block>,
+    C::Api: fp_rpc::EthereumRuntimeRPCApi<Block>,
     C::Api: subtensor_custom_rpc_runtime_api::DelegateInfoRuntimeApi<Block>,
     C::Api: subtensor_custom_rpc_runtime_api::NeuronInfoRuntimeApi<Block>,
     C::Api: subtensor_custom_rpc_runtime_api::SubnetInfoRuntimeApi<Block>,
-    C::Api: subtensor_custom_rpc_runtime_api::SubnetRegistrationRuntimeApi<Block>,
-    B: sc_client_api::Backend<Block> + Send + Sync + 'static,
-    P: TransactionPool + 'static,
+    C::Api: subtensor_custom_rpc_runtime_api::SubnetRegistrationRuntimeApi<Block>,    
+    C: HeaderBackend<Block> + HeaderMetadata<Block, Error = BlockChainError> + 'static,
+    C: BlockchainEvents<Block> + AuxStore + UsageProvider<Block> + StorageProvider<Block, BE>,
+    BE: Backend<Block> + 'static,
+    P: TransactionPool<Block = Block> + 'static,
     A: ChainApi<Block = Block> + 'static,
-	CIDP: CreateInherentDataProviders<Block, ()> + Send + 'static,
-	CT: fp_rpc::ConvertTransaction<<Block as BlockT>::Extrinsic> + Send + Sync + 'static,    
+    CIDP: CreateInherentDataProviders<Block, ()> + Send + 'static,
+    CT: fp_rpc::ConvertTransaction<<Block as BlockT>::Extrinsic> + Send + Sync + 'static,
 {
     use pallet_transaction_payment_rpc::{TransactionPayment, TransactionPaymentApiServer};
-    use sc_consensus_grandpa_rpc::{Grandpa, GrandpaApiServer};
     use substrate_frame_rpc_system::{System, SystemApiServer};
     use subtensor_custom_rpc::{SubtensorCustom, SubtensorCustomApiServer};
+    use sc_consensus_manual_seal::rpc::{ManualSeal, ManualSealApiServer};
 
     let mut module = RpcModule::new(());
     let FullDeps {
         client,
         pool,
         deny_unsafe,
-        grandpa,
-        _backend: _,
 		command_sink,
 		eth,        
     } = deps;
@@ -144,29 +169,26 @@ where
     module.merge(System::new(client.clone(), pool.clone(), deny_unsafe).into_rpc())?;
     module.merge(TransactionPayment::new(client).into_rpc())?;
 
-    let GrandpaDeps {
-        shared_voter_state,
-        shared_authority_set,
-        justification_stream,
-        subscription_executor,
-        finality_provider,
-    } = grandpa;
-
-    module.merge(
-        Grandpa::new(
-            subscription_executor,
-            shared_authority_set.clone(),
-            shared_voter_state,
-            justification_stream,
-            finality_provider,
-        )
-        .into_rpc(),
-    )?;
-
     // Extend this RPC with a custom API by using the following syntax.
     // `YourRpcStruct` should have a reference to a client, which is needed
     // to call into the runtime.
     // `module.merge(YourRpcTrait::into_rpc(YourRpcStruct::new(ReferenceToClient, ...)))?;`
+
+	if let Some(command_sink) = command_sink {
+		module.merge(
+			// We provide the rpc handler with the sending end of the channel to allow the rpc
+			// send EngineCommands to the background block authorship task.
+			ManualSeal::new(command_sink).into_rpc(),
+		)?;
+	}
+
+	// Ethereum compatibility RPCs
+	let module = create_eth::<_, _, _, _, _, _, _, DefaultEthConfig<C, BE>>(
+		module,
+		eth,
+		subscription_task_executor,
+		pubsub_notification_sinks,
+	)?;
 
     Ok(module)
 }

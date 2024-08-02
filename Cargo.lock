@@ -5279,6 +5279,7 @@ checksum = "b93853da6d84c2e3c7d730d6473e8817692dd89be387eb01b94d7f108ecb5b8c"
 name = "node-subtensor"
 version = "4.0.0-dev"
 dependencies = [
+ "async-trait",
  "clap",
  "fc-api",
  "fc-consensus",
@@ -5337,6 +5338,7 @@ dependencies = [
  "sp-timestamp",
  "substrate-build-script-utils",
  "substrate-frame-rpc-system",
+ "substrate-prometheus-endpoint",
  "subtensor-custom-rpc",
  "subtensor-custom-rpc-runtime-api",
 ]

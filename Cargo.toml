@@ -15,6 +15,7 @@ type_complexity = "allow"
 unwrap-used = "deny"
 
 [workspace.dependencies]
+async-trait = "0.1"
 cargo-husky = { version = "1", default-features = false }
 clap = "4.5.4"
 codec = { version = "3.2.2", default-features = false }
@@ -111,6 +112,7 @@ sp-weights = { git = "https://github.com/paritytech/polkadot-sdk.git", branch = 
 
 sc-consensus-manual-seal = { git = "https://github.com/paritytech/polkadot-sdk.git", branch = "release-polkadot-v1.11.0", default-features = false }
 sc-network-sync = { git = "https://github.com/paritytech/polkadot-sdk.git", branch = "release-polkadot-v1.11.0", default-features = false }
+substrate-prometheus-endpoint = { git = "https://github.com/paritytech/polkadot-sdk.git", branch = "release-polkadot-v1.11.0", default-features = false }
 
 # Frontier
 fp-evm = { git = "https://github.com/gztensor/frontier", branch = "polkadot-v1.11.0-subtensor", default-features = false }
