@@ -29,14 +29,14 @@ use smallvec::smallvec;
 use sp_api::impl_runtime_apis;
 use sp_consensus_aura::sr25519::AuthorityId as AuraId;
 use sp_core::{
-	crypto::{ByteArray, KeyTypeId},
+	crypto::{AccountId32, ByteArray, KeyTypeId},
 	H160, H256, U256, OpaqueMetadata
 };
 use sp_runtime::{
     create_runtime_str, generic, impl_opaque_keys,
     traits::{
-        AccountIdLookup, BlakeTwo256, Block as BlockT, IdentifyAccount, NumberFor, One, Verify, DispatchInfoOf, PostDispatchInfoOf, Dispatchable,
-        UniqueSaturatedInto, IdentityLookup
+        BlakeTwo256, Block as BlockT, IdentifyAccount, NumberFor, One, Verify, DispatchInfoOf, PostDispatchInfoOf, Dispatchable,
+        UniqueSaturatedInto, AccountIdLookup, AccountIdConversion
     },
 	transaction_validity::{TransactionSource, TransactionValidity, TransactionValidityError},
     ApplyExtrinsicResult, MultiSignature, ConsensusEngineId
@@ -66,7 +66,7 @@ pub use frame_support::{
 pub use frame_system::Call as SystemCall;
 pub use pallet_balances::Call as BalancesCall;
 pub use pallet_timestamp::Call as TimestampCall;
-use pallet_transaction_payment::{CurrencyAdapter, Multiplier};
+use pallet_transaction_payment::{ConstFeeMultiplier, Multiplier, FungibleAdapter};
 #[cfg(any(feature = "std", test))]
 pub use sp_runtime::BuildStorage;
 pub use sp_runtime::{Perbill, Permill};
@@ -77,12 +77,11 @@ mod precompiles;
 use precompiles::FrontierPrecompiles;
 
 // Frontier
-use fp_account::EthereumSignature;
 use fp_evm::weight_per_gas;
 use fp_rpc::TransactionStatus;
 use pallet_ethereum::{Call::transact, PostLogContent, Transaction as EthereumTransaction};
 use pallet_evm::{
-	Account as EVMAccount, EnsureAccountId20, FeeCalculator, IdentityAddressMapping, Runner,
+	Account as EVMAccount, FeeCalculator, Runner, IdentityAddressMapping
 };
 
 // Subtensor module
@@ -242,6 +241,7 @@ impl frame_system::Config for Runtime {
     type RuntimeTask = RuntimeTask;
     // The lookup mechanism to get account ID from whatever is passed in dispatchers.
     type Lookup = AccountIdLookup<AccountId, ()>;
+    // type Lookup = IdentityLookup<AccountId>;
     // The type for hashing blocks and tries.
     type Hash = Hash;
     // The hashing algorithm used.
@@ -416,25 +416,20 @@ where
 parameter_types! {
     // Used with LinearWeightToFee conversion.
     pub const FeeWeightRatio: u64 = 1;
-    pub const TransactionByteFee: u128 = 1;
+    pub const TransactionByteFee: u64 = 1;
+    pub const OperationalFeeMultiplier: u8 = 5;
     pub FeeMultiplier: Multiplier = Multiplier::one();
 }
 
 impl pallet_transaction_payment::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
-
-    type OnChargeTransaction = CurrencyAdapter<Balances, ()>;
+    type OnChargeTransaction = FungibleAdapter<Balances, ()>;
     //type TransactionByteFee = TransactionByteFee;
-
     // Convert dispatch weight to a chargeable fee.
     type WeightToFee = LinearWeightToFee<FeeWeightRatio>;
-
-    type FeeMultiplierUpdate = ();
-
-    type OperationalFeeMultiplier = ConstU8<1>;
-
+    type OperationalFeeMultiplier = OperationalFeeMultiplier;
     type LengthToFee = IdentityFee<Balance>;
-    //type FeeMultiplierUpdate = ConstFeeMultiplier<FeeMultiplier>;
+    type FeeMultiplierUpdate = ConstFeeMultiplier<FeeMultiplier>;
 }
 
 // Configure collective pallet for council
@@ -1268,6 +1263,11 @@ impl pallet_admin_utils::Config for Runtime {
     type WeightInfo = pallet_admin_utils::weights::SubstrateWeight<Runtime>;
 }
 
+// Define the ChainId
+parameter_types! {
+    pub const SubtensorChainId: u64 = 0x03C4; // Unicode for lowercase tau
+}
+
 impl pallet_evm_chain_id::Config for Runtime {}
 
 pub struct FindAuthorTruncated<F>(PhantomData<F>);
@@ -1308,7 +1308,7 @@ impl pallet_evm::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
 	type PrecompilesType = FrontierPrecompiles<Self>;
 	type PrecompilesValue = PrecompilesValue;
-	type ChainId = EVMChainId;
+	type ChainId = SubtensorChainId;
 	type BlockGasLimit = BlockGasLimit;
 	type Runner = pallet_evm::runner::stack::Runner<Self>;
 	type OnChargeTransaction = ();
@@ -1514,6 +1514,7 @@ pub type CheckedExtrinsic =
 
 // The payload being signed in transactions.
 pub type SignedPayload = generic::SignedPayload<RuntimeCall, SignedExtra>;
+
 // Executive: handles dispatch to the various modules.
 pub type Executive = frame_executive::Executive<
     Runtime,
