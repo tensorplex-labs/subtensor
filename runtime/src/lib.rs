@@ -1288,10 +1288,93 @@ impl<F: FindAuthor<u32>> FindAuthor<H160> for FindAuthorTruncated<F> {
 const BLOCK_GAS_LIMIT: u64 = 75_000_000;
 const MAX_POV_SIZE: u64 = 5 * 1024 * 1024;
 
+
+
+pub struct MyExtendedPrecompiles<R> {
+    frontier_precompiles: FrontierPrecompiles<R>,
+}
+
+fn h160_hash(a: u64) -> H160 {
+	H160::from_low_u64_be(a)
+}
+
+impl<R> MyExtendedPrecompiles<R>
+where
+    R: pallet_evm::Config,
+{
+    pub fn new() -> Self {
+        MyExtendedPrecompiles {
+            frontier_precompiles: FrontierPrecompiles::<R>::new()
+        }
+    }
+}
+
+use pallet_evm::{ ExitSucceed, IsPrecompileResult, PrecompileHandle, PrecompileOutput, PrecompileResult, PrecompileSet };
+
+impl<R> PrecompileSet for MyExtendedPrecompiles<R>
+where
+    R: pallet_evm::Config,
+{
+    fn execute(&self, handle: &mut impl PrecompileHandle) -> Option<PrecompileResult> {
+        // Delegation to Frontier precompiles
+        let frontier_result = self.frontier_precompiles.execute(handle);
+        if frontier_result.is_some() {
+            return frontier_result;
+        }
+
+        // Handle custom precompiles
+        match handle.code_address() {
+            // Custom precompile addresses
+            a if a == h160_hash(2048) => Some(MyCustomPrecompile::execute(handle)),
+            // Add more custom precompiles here
+            _ => None,
+        }
+    }
+
+    fn is_precompile(&self, address: H160, gas: u64) -> IsPrecompileResult {
+
+        log::info!("!!!!!!!!!!!!!!!!!!!!!!!!!!! h160_hash = {:?}", h160_hash(2048));
+
+        let frontier_is_precompile = self.frontier_precompiles.is_precompile(address.clone(), gas);
+        if let IsPrecompileResult::Answer { is_precompile, extra_cost: _ } = frontier_is_precompile {
+            if is_precompile {
+                return frontier_is_precompile;
+            }
+        }
+
+        // Check custom precompile addresses
+        match address {
+            a if a == h160_hash(2048) => IsPrecompileResult::Answer {
+                is_precompile: false,
+                extra_cost: 0,
+            },
+            // Check more custom addresses here
+            _ => IsPrecompileResult::Answer {
+                is_precompile: false,
+                extra_cost: 0,
+            }    
+        }
+    }
+}
+
+pub struct MyCustomPrecompile;
+
+impl MyCustomPrecompile {
+    pub fn execute(handle: &mut impl PrecompileHandle) -> PrecompileResult {
+        // Custom logic here
+        log::info!("Executing custom precompile logic");
+
+        Ok(PrecompileOutput {
+            exit_status: ExitSucceed::Returned,
+            output: vec![],
+        })
+    }
+}
+
 parameter_types! {
 	pub BlockGasLimit: U256 = U256::from(BLOCK_GAS_LIMIT);
 	pub const GasLimitPovSizeRatio: u64 = BLOCK_GAS_LIMIT.saturating_div(MAX_POV_SIZE);
-	pub PrecompilesValue: FrontierPrecompiles<Runtime> = FrontierPrecompiles::<_>::new();
+	pub PrecompilesValue: MyExtendedPrecompiles<Runtime> = MyExtendedPrecompiles::<_>::new();
 	pub WeightPerGas: Weight = Weight::from_parts(weight_per_gas(BLOCK_GAS_LIMIT, NORMAL_DISPATCH_RATIO, MILLISECS_PER_BLOCK), 0);
 	pub SuicideQuickClearLimit: u32 = 0;
 }
@@ -1306,7 +1389,7 @@ impl pallet_evm::Config for Runtime {
 	type AddressMapping = pallet_evm::HashedAddressMapping<BlakeTwo256>;
 	type Currency = Balances;
 	type RuntimeEvent = RuntimeEvent;
-	type PrecompilesType = FrontierPrecompiles<Self>;
+	type PrecompilesType = MyExtendedPrecompiles<Self>;
 	type PrecompilesValue = PrecompilesValue;
 	type ChainId = SubtensorChainId;
 	type BlockGasLimit = BlockGasLimit;
