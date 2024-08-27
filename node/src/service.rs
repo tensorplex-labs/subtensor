@@ -397,14 +397,6 @@ pub async fn new_full<
         );
     }
 
-    let finality_proof_provider = sc_consensus_grandpa::FinalityProofProvider::new_for_service(
-        backend.clone(),
-        Some(grandpa_link.shared_authority_set().clone()),
-    );
-    let justification_stream = grandpa_link.justification_stream();
-    let shared_authority_set = grandpa_link.shared_authority_set().clone();
-    let shared_voter_state = SharedVoterState::empty();
-
     let role = config.role.clone();
     let force_authoring = config.force_authoring;
     let backoff_authoring_blocks = Some(BackoffAuthoringOnFinalizedHeadLagging {

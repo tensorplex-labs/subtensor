@@ -6,7 +6,7 @@ use sc_network_sync::SyncingService;
 use sc_rpc::SubscriptionTaskExecutor;
 use sc_service::{error::Error as ServiceError, Configuration, TaskManager};
 use futures::future;
-pub use fc_rpc::{EthTask, EthBlockDataCacheTask, EthConfig};
+pub use fc_rpc::{EthTask, EthConfig};
 use sc_client_api::{
 	backend::{Backend, StorageProvider},
 	client::BlockchainEvents,
@@ -22,7 +22,7 @@ use sp_consensus_aura::sr25519::AuthorityId as AuraId;
 use sp_block_builder::BlockBuilder as BlockBuilderApi;
 use fp_rpc::{ConvertTransaction, ConvertTransactionRuntimeApi, EthereumRuntimeRPCApi};
 use sp_blockchain::{Error as BlockChainError, HeaderBackend, HeaderMetadata};
-use sc_transaction_pool::{ChainApi, Pool};
+use sc_transaction_pool::ChainApi;
 use sc_transaction_pool_api::TransactionPool;
 use sp_inherents::CreateInherentDataProviders;
 

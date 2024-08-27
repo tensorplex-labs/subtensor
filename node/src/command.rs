@@ -16,7 +16,7 @@ use sp_runtime::traits::HashingFor;
 
 use node_subtensor_runtime::Block;
 use sc_cli::SubstrateCli;
-use sc_service::{Configuration, PartialComponents};
+use sc_service::Configuration;
 use futures::TryFutureExt;
 
 impl SubstrateCli for Cli {

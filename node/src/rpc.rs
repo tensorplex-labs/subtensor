@@ -10,8 +10,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use fp_rpc::{ConvertTransactionRuntimeApi, EthereumRuntimeRPCApi};
 use futures::channel::mpsc;
 use jsonrpsee::RpcModule;
-use node_subtensor_runtime::{opaque::Block, AccountId, Balance, BlockNumber, Hash, Index, Nonce};
-use sc_consensus_grandpa::FinalityProofProvider;
+use node_subtensor_runtime::{opaque::Block, AccountId, Balance, Hash, Nonce};
 use sc_consensus_manual_seal::EngineCommand;
 use sc_network::service::traits::NetworkService;
 use sc_network_sync::SyncingService;
@@ -19,7 +18,7 @@ use sc_transaction_pool_api::TransactionPool;
 use sp_api::{CallApiAt, ProvideRuntimeApi};
 use sp_block_builder::BlockBuilder;
 use sp_blockchain::{Error as BlockChainError, HeaderBackend, HeaderMetadata};
-use sp_runtime::{traits::{BlakeTwo256, Block as BlockT}, OpaqueExtrinsic};
+use sp_runtime::traits::Block as BlockT;
 use sc_transaction_pool::{ChainApi, Pool};
 use fc_storage::StorageOverride;
 pub use fc_rpc::{EthBlockDataCacheTask, EthConfig};
@@ -37,20 +36,6 @@ use sp_consensus_aura::AuraApi;
 use sp_consensus_aura::sr25519::AuthorityId as AuraId;
 
 use crate::ethereum::create_eth;
-
-/// Dependencies for GRANDPA
-pub struct GrandpaDeps<B> {
-    /// Voting round info.
-    pub shared_voter_state: sc_consensus_grandpa::SharedVoterState,
-    /// Authority set info.
-    pub shared_authority_set: sc_consensus_grandpa::SharedAuthoritySet<Hash, BlockNumber>,
-    /// Receives notifications about justification events from Grandpa.
-    pub justification_stream: sc_consensus_grandpa::GrandpaJustificationStream<Block>,
-    /// Executor to drive the subscription manager in the Grandpa RPC handler.
-    pub subscription_executor: sc_rpc::SubscriptionTaskExecutor,
-    /// Finality proof provider.
-    pub finality_provider: Arc<FinalityProofProvider<B, Block>>,
-}
 
 /// Extra dependencies for Ethereum compatibility.
 pub struct EthDeps<B: BlockT, C, P, A: ChainApi, CT, CIDP> {
@@ -93,9 +78,10 @@ pub struct EthDeps<B: BlockT, C, P, A: ChainApi, CT, CIDP> {
 	pub pending_create_inherent_data_providers: CIDP,
 }
 
+/// Default Eth RPC configuration 
 pub struct DefaultEthConfig<C, BE>(std::marker::PhantomData<(C, BE)>);
 
-impl<C, BE> fc_rpc::EthConfig<Block, C> for DefaultEthConfig<C, BE>
+impl<C, BE> EthConfig<Block, C> for DefaultEthConfig<C, BE>
 where
 	C: StorageProvider<Block, BE> + Sync + Send + 'static,
 	BE: Backend<Block> + 'static,
@@ -131,12 +117,12 @@ pub fn create_full<C, P, BE, A, CT, CIDP>(
 ) -> Result<RpcModule<()>, Box<dyn std::error::Error + Send + Sync>>
 where
     C: CallApiAt<Block> + ProvideRuntimeApi<Block>,
-    C::Api: sp_block_builder::BlockBuilder<Block>,
-    C::Api: sp_consensus_aura::AuraApi<Block, AuraId>,
+    C::Api: BlockBuilder<Block>,
+    C::Api: AuraApi<Block, AuraId>,
     C::Api: substrate_frame_rpc_system::AccountNonceApi<Block, AccountId, Nonce>,
     C::Api: pallet_transaction_payment_rpc::TransactionPaymentRuntimeApi<Block, Balance>,
-    C::Api: fp_rpc::ConvertTransactionRuntimeApi<Block>,
-    C::Api: fp_rpc::EthereumRuntimeRPCApi<Block>,
+    C::Api: ConvertTransactionRuntimeApi<Block>,
+    C::Api: EthereumRuntimeRPCApi<Block>,
     C::Api: subtensor_custom_rpc_runtime_api::DelegateInfoRuntimeApi<Block>,
     C::Api: subtensor_custom_rpc_runtime_api::NeuronInfoRuntimeApi<Block>,
     C::Api: subtensor_custom_rpc_runtime_api::SubnetInfoRuntimeApi<Block>,

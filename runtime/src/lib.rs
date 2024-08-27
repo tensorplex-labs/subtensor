@@ -16,7 +16,7 @@ use frame_support::{
     dispatch::DispatchResultWithPostInfo,
     genesis_builder_helper::{build_state, get_preset},
     pallet_prelude::{DispatchError, Get},
-    traits::{fungible::HoldConsideration, Contains, LinearStoragePrice, OnUnbalanced},
+    traits::{fungible::HoldConsideration, Contains, LinearStoragePrice},
 };
 use frame_system::{EnsureNever, EnsureRoot, EnsureRootWithSuccess, RawOrigin};
 use pallet_commitments::CanCommit;
@@ -29,14 +29,14 @@ use smallvec::smallvec;
 use sp_api::impl_runtime_apis;
 use sp_consensus_aura::sr25519::AuthorityId as AuraId;
 use sp_core::{
-	crypto::{AccountId32, ByteArray, KeyTypeId},
+	crypto::{ByteArray, KeyTypeId},
 	H160, H256, U256, OpaqueMetadata
 };
 use sp_runtime::{
     create_runtime_str, generic, impl_opaque_keys,
     traits::{
         BlakeTwo256, Block as BlockT, IdentifyAccount, NumberFor, One, Verify, DispatchInfoOf, PostDispatchInfoOf, Dispatchable,
-        UniqueSaturatedInto, AccountIdLookup, AccountIdConversion
+        UniqueSaturatedInto, AccountIdLookup
     },
 	transaction_validity::{TransactionSource, TransactionValidity, TransactionValidityError},
     ApplyExtrinsicResult, MultiSignature, ConsensusEngineId
@@ -81,7 +81,7 @@ use fp_evm::weight_per_gas;
 use fp_rpc::TransactionStatus;
 use pallet_ethereum::{Call::transact, PostLogContent, Transaction as EthereumTransaction};
 use pallet_evm::{
-	Account as EVMAccount, FeeCalculator, Runner, IdentityAddressMapping
+	Account as EVMAccount, FeeCalculator, Runner
 };
 
 // Subtensor module
@@ -543,6 +543,7 @@ impl pallet_collective::Config<TriumvirateCollective> for Runtime {
 }
 
 // We call council members Triumvirate
+#[allow(unused)]
 type TriumvirateMembership = pallet_membership::Instance1;
 impl pallet_membership::Config<TriumvirateMembership> for Runtime {
     type RuntimeEvent = RuntimeEvent;
@@ -558,6 +559,7 @@ impl pallet_membership::Config<TriumvirateMembership> for Runtime {
 }
 
 // We call our top K delegates membership Senate
+#[allow(unused)]
 type SenateMembership = pallet_membership::Instance2;
 impl pallet_membership::Config<SenateMembership> for Runtime {
     type RuntimeEvent = RuntimeEvent;
