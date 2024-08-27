@@ -5,10 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 
 # The base directory of the subtensor project
 BASE_DIR="$SCRIPT_DIR/.."
-
-: "${CHAIN:=local}"
-: "${BUILD_BINARY:=1}"
-: "${FEATURES:=""}"
+CHAIN=local
+BUILD_BINARY=1
+FEATURES=""
 
 SPEC_PATH="${SCRIPT_DIR}/specs/"
 FULL_PATH="$SPEC_PATH$CHAIN.json"
@@ -21,6 +20,10 @@ if [ ! -d "$SPEC_PATH" ]; then
   echo "*** Creating directory ${SPEC_PATH}..."
   mkdir $SPEC_PATH
 fi
+
+# generate node keys
+$BASE_DIR/target/release/node-subtensor key generate-node-key --chain="$FULL_PATH" --base-path /tmp/alice
+$BASE_DIR/target/release/node-subtensor key generate-node-key --chain="$FULL_PATH" --base-path /tmp/bob
 
 if [[ $BUILD_BINARY == "1" ]]; then
   echo "*** Building substrate binary..."
