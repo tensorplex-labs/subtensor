@@ -25,7 +25,7 @@ impl BalanceTransferPrecompile {
             // Forward all received value to the destination address
             let amount: U256 = handle.context().apparent_value;
 
-            // This is hardcoded hashed address maping of 
+            // This is hardcoded hashed address mapping of 
             // 0x0000000000000000000000000000000000000800 to ss58 public key
             // i.e. the contract sends funds it received to the destination address
             // from the method parameter
