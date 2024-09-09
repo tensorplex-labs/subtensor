@@ -113,7 +113,7 @@ impl StakingPrecompile {
         U256::from(total_stake).to_big_endian(&mut output);
         Ok(PrecompileOutput {
             exit_status: ExitSucceed::Returned,
-            output: output.to_vec(), // output: output.to_vec(),
+            output: output.to_vec(),
         })
     }
 
