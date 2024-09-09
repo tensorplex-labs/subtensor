@@ -59,6 +59,12 @@ impl StakingPrecompile {
             id if id == get_method_id("removeStake(bytes32,uint64)") => {
                 Self::remove_stake(handle, &method_input)
             }
+            id if id == get_method_id("getTotalStakeForHotkey(bytes32)") => {
+                Self::get_total_stake_for_hotkey(handle, &method_input)
+            }
+            id if id == get_method_id("getTotalStakeForColdkey(bytes32)") => {
+                Self::get_total_stake_for_coldkey(handle, &method_input)
+            }
             _ => Err(PrecompileFailure::Error {
                 exit_status: ExitError::InvalidRange,
             }),
@@ -87,6 +93,28 @@ impl StakingPrecompile {
             amount_unstaked: amount,
         });
         Self::dispatch(handle, call)
+    }
+
+    fn get_total_stake_for_hotkey(_: &mut impl PrecompileHandle, data: &[u8]) -> PrecompileResult {
+        let hotkey = Self::parse_hotkey(data)?.into();
+        let total_stake = pallet_subtensor::Pallet::<Runtime>::get_total_stake_for_hotkey(&hotkey);
+        let mut output = [0u8; 32]; // Initialize an array of 32 bytes (256 bits)
+        U256::from(total_stake).to_big_endian(&mut output);
+        Ok(PrecompileOutput {
+            exit_status: ExitSucceed::Returned,
+            output: output.to_vec(),
+        })
+    }
+
+    fn get_total_stake_for_coldkey(_: &mut impl PrecompileHandle, data: &[u8]) -> PrecompileResult {
+        let hotkey = Self::parse_hotkey(data)?.into();
+        let total_stake = pallet_subtensor::Pallet::<Runtime>::get_total_stake_for_coldkey(&hotkey);
+        let mut output = [0u8; 32]; // Initialize an array of 32 bytes (256 bits)
+        U256::from(total_stake).to_big_endian(&mut output);
+        Ok(PrecompileOutput {
+            exit_status: ExitSucceed::Returned,
+            output: output.to_vec(), // output: output.to_vec(),
+        })
     }
 
     fn parse_hotkey(data: &[u8]) -> Result<[u8; 32], PrecompileFailure> {
