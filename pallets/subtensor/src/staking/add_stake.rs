@@ -72,15 +72,6 @@ impl<T: Config> Pallet<T> {
         //     Error::<T>::HotKeyNotDelegateAndSignerNotOwnHotKey
         // );
 
-        // Ensure we don't exceed stake rate limit
-        // DEPRECATED
-        let stakes_this_interval =
-            Self::get_stakes_this_interval_for_coldkey_hotkey(&coldkey, &hotkey);
-        ensure!(
-            stakes_this_interval < Self::get_target_stakes_per_interval(),
-            Error::<T>::StakeRateLimitExceeded
-        );
-
         // Set the last time the stake increased for nominator drain protection.
         LastAddStakeIncrease::<T>::insert(&hotkey, &coldkey, Self::get_current_block_as_u64());
 
@@ -101,17 +92,6 @@ impl<T: Config> Pallet<T> {
         // Convert and stake to alpha on the subnet.
         let alpha_staked: u64 = Self::stake_into_subnet(&hotkey, &coldkey, netuid, tao_staked);
 
-        // Set last block for rate limiting
-        let block: u64 = Self::get_current_block_as_u64();
-        Self::set_last_tx_block(&coldkey, block);
-
-        // Emit the staking event.
-        Self::set_stakes_this_interval_for_coldkey_hotkey(
-            &coldkey,
-            &hotkey,
-            stakes_this_interval.saturating_add(1),
-            block,
-        );
         log::info!(
             "StakeAdded( hotkey:{:?}, alpha_staked:{:?} )",
             hotkey.clone(),

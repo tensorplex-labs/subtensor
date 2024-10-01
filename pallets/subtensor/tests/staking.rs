@@ -437,46 +437,6 @@ fn test_add_stake_under_limit() {
     });
 }
 
-// SKIP_WASM_BUILD=1 RUST_LOG=info cargo test --test staking -- test_add_stake_rate_limit_exceeded --exact --nocapture
-#[test]
-fn test_add_stake_rate_limit_exceeded() {
-    new_test_ext(1).execute_with(|| {
-        let hotkey_account_id = U256::from(561337);
-        let coldkey_account_id = U256::from(61337);
-        let netuid: u16 = 1;
-        let start_nonce: u64 = 0;
-        let tempo: u16 = 13;
-        let max_stakes = 2;
-        let block_number = 1;
-
-        SubtensorModule::set_target_stakes_per_interval(max_stakes);
-        SubtensorModule::set_stakes_this_interval_for_coldkey_hotkey(
-            &coldkey_account_id,
-            &hotkey_account_id,
-            max_stakes,
-            block_number,
-        );
-
-        add_network(netuid, tempo, 0);
-        register_ok_neuron(netuid, hotkey_account_id, coldkey_account_id, start_nonce);
-        SubtensorModule::add_balance_to_coldkey_account(&coldkey_account_id, 60000);
-        assert_err!(
-            SubtensorModule::add_stake(
-                <<Test as Config>::RuntimeOrigin>::signed(coldkey_account_id),
-                hotkey_account_id,
-                netuid,
-                1,
-            ),
-            Error::<Test>::StakeRateLimitExceeded
-        );
-
-        let current_stakes = SubtensorModule::get_stakes_this_interval_for_coldkey_hotkey(
-            &coldkey_account_id,
-            &hotkey_account_id,
-        );
-        assert_eq!(current_stakes, max_stakes);
-    });
-}
 
 // /***********************************************************
 // 	staking::remove_stake() tests
@@ -516,48 +476,6 @@ fn test_remove_stake_under_limit() {
             &hotkey_account_id,
         );
         assert!(current_unstakes <= max_unstakes);
-    });
-}
-
-// SKIP_WASM_BUILD=1 RUST_LOG=info cargo test --test staking -- test_remove_stake_under_limit --exact --nocapture
-#[test]
-fn test_remove_stake_rate_limit_exceeded() {
-    new_test_ext(1).execute_with(|| {
-        let hotkey_account_id = U256::from(561337);
-        let coldkey_account_id = U256::from(61337);
-        let netuid: u16 = 1;
-        let start_nonce: u64 = 0;
-        let tempo: u16 = 13;
-        let max_unstakes = 1;
-        let block_number = 1;
-
-        SubtensorModule::set_target_stakes_per_interval(max_unstakes);
-        SubtensorModule::set_stakes_this_interval_for_coldkey_hotkey(
-            &coldkey_account_id,
-            &hotkey_account_id,
-            max_unstakes,
-            block_number,
-        );
-
-        add_network(netuid, tempo, 0);
-        register_ok_neuron(netuid, hotkey_account_id, coldkey_account_id, start_nonce);
-        SubtensorModule::add_balance_to_coldkey_account(&coldkey_account_id, 60000);
-        SubtensorModule::stake_into_subnet(&hotkey_account_id, &coldkey_account_id, netuid, 2);
-        assert_err!(
-            SubtensorModule::remove_stake(
-                <<Test as Config>::RuntimeOrigin>::signed(coldkey_account_id),
-                hotkey_account_id,
-                netuid,
-                2,
-            ),
-            Error::<Test>::UnstakeRateLimitExceeded
-        );
-
-        let current_unstakes = SubtensorModule::get_stakes_this_interval_for_coldkey_hotkey(
-            &coldkey_account_id,
-            &hotkey_account_id,
-        );
-        assert_eq!(current_unstakes, max_unstakes);
     });
 }
 
