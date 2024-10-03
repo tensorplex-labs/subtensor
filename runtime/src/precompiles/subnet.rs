@@ -32,7 +32,7 @@ impl SubnetPrecompile {
             id if id == get_method_id("registerNetwork()") => {
                 Self::create_subnet(handle, &method_input)
             }
-            id if id == get_method_id("burnedRegister(uint16)") => {
+            id if id == get_method_id("burnedRegister(uint256)") => {
                 Self::burned_register_subnet(handle, &method_input)
             }
             _ => Err(PrecompileFailure::Error {
