@@ -14,10 +14,12 @@ use pallet_evm_precompile_simple::{ECRecover, ECRecoverPublicKey, Identity, Ripe
 mod balance_transfer;
 mod ed25519;
 mod staking;
+mod subnet;
 
 use balance_transfer::*;
 use ed25519::*;
 use staking::*;
+use subnet::*;
 
 pub struct FrontierPrecompiles<R>(PhantomData<R>);
 
@@ -73,6 +75,7 @@ where
                 Some(BalanceTransferPrecompile::execute(handle))
             }
             a if a == hash(STAKING_PRECOMPILE_INDEX) => Some(StakingPrecompile::execute(handle)),
+            a if a == hash(SUBNET_PRECOMPILE_INDEX) => Some(SubnetPrecompile::execute(handle)),
             _ => None,
         }
     }
