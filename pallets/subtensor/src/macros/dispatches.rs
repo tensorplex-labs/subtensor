@@ -1053,8 +1053,9 @@ mod dispatches {
             destination_hotkey: T::AccountId,
             origin_netuid: u16,
             destination_netuid: u16,
+            alpha_to_be_moved: u64,
         ) -> DispatchResult {
-            Self::do_move_stake(origin, origin_hotkey, destination_hotkey, origin_netuid, destination_netuid)
+            Self::do_move_stake(origin, origin_hotkey, destination_hotkey, origin_netuid, destination_netuid, alpha_to_be_moved)
         }
     }
 }
