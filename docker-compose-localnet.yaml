@@ -1,0 +1,32 @@
+volumes:
+  localnet:
+
+services:
+  localnet:
+    container_name: localnet
+    image: ghcr.io/tensorplex-labs/subtensor:localnet
+    cpu_count: 4
+    mem_limit: 40000000000
+    memswap_limit: 80000000000
+    volumes:
+      - localnet:/tmp
+      - ./localnet.sh:/subtensor/scripts/localnet.sh
+    command:
+      - /bin/bash
+      - -c
+      - |
+        /subtensor/scripts/localnet.sh False --no-purge
+    ports:
+      - "9944:9944"
+      - "30333:30333"
+      - "9933:9933"
+    expose:
+      - "9944"
+      - "30333"
+      - "9933"
+    environment:
+      - CARGO_HOME=/var/www/node-subtensor/.cargo
+      - BUILD_BINARY=0
+    logging:
+      options:
+        max-size: "100m"
