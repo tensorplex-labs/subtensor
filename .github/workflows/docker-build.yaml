@@ -1,0 +1,35 @@
+name: Docker Build
+
+on:
+  push:
+    branches:
+      - localnet
+
+jobs:
+  docker_publish:
+    name: Docker Build
+    runs-on: self-hosted
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract Branch Name
+        run: |
+          BRANCH_NAME=${GITHUB_REF#refs/heads/}
+          SANITIZED_BRANCH_NAME=${BRANCH_NAME//\//-}
+          echo "BRANCH_NAME=$SANITIZED_BRANCH_NAME" >> $GITHUB_ENV
+
+      - name: Build and Push Docker Image with Branch Tag
+        if: github.ref == 'refs/heads/localnet'
+        uses: macbre/push-to-ghcr@master
+        with:
+          image_name: ${{ github.repository }}
+          image_tag: ${{ env.BRANCH_NAME }}
+          github_token: ${{ secrets.PAT }}
+          dockerfile: Dockerfile.localnet
