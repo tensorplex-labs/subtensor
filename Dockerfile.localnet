@@ -1,0 +1,20 @@
+FROM ubuntu:22.04
+
+SHELL ["/bin/bash", "-c"]
+
+WORKDIR /
+RUN apt update
+RUN apt install --assume-yes make build-essential git clang curl libssl-dev llvm libudev-dev protobuf-compiler
+
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Clone subtensor
+RUN git clone https://github.com/opentensor/subtensor.git
+WORKDIR /subtensor
+
+RUN bash ./scripts/init.sh
+RUN cargo build -p node-subtensor --profile production --features pow-faucet
+
+CMD ["BUILD_BINARY=0 ./scripts/localnet.sh"]
