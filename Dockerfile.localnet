@@ -17,6 +17,6 @@ WORKDIR /subtensor
 RUN bash ./scripts/init.sh
 # RUN cargo build -p node-subtensor --profile production --features pow-faucet
 # RUN cargo build --workspace --profile=release --features "$FEATURES" --manifest-path "$BASE_DIR/Cargo.toml"
-RUN cargo build --workspace --profile=release pow-faucet --manifest-path "Cargo.toml"
+RUN cargo build --workspace --profile=release --features pow-faucet --manifest-path "Cargo.toml"
 
 CMD ["/subtensor/scripts/localnet.sh", "False", "--no-purge"]
