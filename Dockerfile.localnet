@@ -19,4 +19,4 @@ RUN bash ./scripts/init.sh
 # RUN cargo build --workspace --profile=release --features "$FEATURES" --manifest-path "$BASE_DIR/Cargo.toml"
 RUN cargo build --workspace --profile=release pow-faucet --manifest-path "Cargo.toml"
 
-CMD ["BUILD_BINARY=0 ./scripts/localnet.sh"]
+CMD ["/subtensor/scripts/localnet.sh", "False", "--no-purge"]
