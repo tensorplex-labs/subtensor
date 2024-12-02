@@ -33,3 +33,12 @@ jobs:
           image_tag: ${{ env.BRANCH_NAME }}
           github_token: ${{ secrets.PAT }}
           dockerfile: Dockerfile.localnet
+
+      - name: Build with fastmode and Push Docker Image with Branch Tag
+        if: github.ref == 'refs/heads/localnet'
+        uses: macbre/push-to-ghcr@master
+        with:
+          image_name: ${{ github.repository }}
+          image_tag: ${{ env.BRANCH_NAME }}
+          github_token: ${{ secrets.PAT }}
+          dockerfile: Dockerfile-fastmode.localnet
