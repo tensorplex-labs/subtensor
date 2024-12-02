@@ -39,6 +39,6 @@ jobs:
         uses: macbre/push-to-ghcr@master
         with:
           image_name: ${{ github.repository }}
-          image_tag: ${{ env.BRANCH_NAME }}
+          image_tag: ${{ env.BRANCH_NAME }}-fastmode
           github_token: ${{ secrets.PAT }}
           dockerfile: Dockerfile-fastmode.localnet
