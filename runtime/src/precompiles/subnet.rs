@@ -1,7 +1,9 @@
 use crate::precompiles::{dispatch, get_method_id, get_slice};
-use crate::{Runtime, RuntimeCall};
-use pallet_evm::{ExitError, PrecompileFailure, PrecompileHandle, PrecompileResult};
+use crate::{ Runtime, RuntimeCall};
+use pallet_evm::{AddressMapping, ExitError, PrecompileFailure, PrecompileHandle, PrecompileResult, HashedAddressMapping };
 use sp_std::vec;
+use sp_runtime::AccountId32;
+use sp_runtime::traits::BlakeTwo256;
 
 pub const SUBNET_PRECOMPILE_INDEX: u64 = 2051;
 // three bytes with max lenght 1K
@@ -30,6 +32,9 @@ impl SubnetPrecompile {
             id if id == get_method_id("registerNetwork(bytes,bytes,bytes)") => {
                 Self::register_network(handle, &method_input)
             }
+			id if id == get_method_id("burnedRegister(uint16)") => {
+                Self::burned_register(handle, &method_input)
+            }
             id if id == get_method_id("registerNetwork()") => {
                 Self::register_network(handle, &[0_u8; 0])
             }
@@ -38,6 +43,35 @@ impl SubnetPrecompile {
             }),
         }
     }
+
+	fn burned_register(handle: &mut impl PrecompileHandle, data: &[u8]) -> PrecompileResult {
+        let netuid = Self::parse_netuid(data)?;
+		let account_id =
+        <HashedAddressMapping<BlakeTwo256> as AddressMapping<AccountId32>>::into_account_id(
+            handle.context().caller,
+        );
+
+		// Based on the netuid, we try to burned register the subnet
+		let call = RuntimeCall::SubtensorModule(
+			pallet_subtensor::Call::<Runtime>::burned_register { netuid: netuid, hotkey: account_id }
+		);
+
+        // Dispatch the register_network call
+        dispatch(handle, call, STAKING_CONTRACT_ADDRESS)
+	}
+
+    fn parse_netuid(data: &[u8]) -> Result<u16, PrecompileFailure> {
+        if data.len() < 32 {
+            return Err(PrecompileFailure::Error {
+                exit_status: ExitError::InvalidRange,
+            });
+        }
+        let mut netuid = [0u8; 2];
+        netuid.copy_from_slice(get_slice(data, 30, 32)?);
+        let result = u16::from_be_bytes(netuid);
+        Ok(result)
+    }
+
 
     fn register_network(handle: &mut impl PrecompileHandle, data: &[u8]) -> PrecompileResult {
         let call = if data.is_empty() {
