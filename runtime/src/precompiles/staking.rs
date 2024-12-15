@@ -26,7 +26,7 @@
 //
 
 use pallet_evm::BalanceConverter;
-use pallet_evm::{ExitError, PrecompileFailure, PrecompileHandle, PrecompileResult};
+use pallet_evm::{ExitError, ExitSucceed, PrecompileOutput, PrecompileFailure, PrecompileHandle, PrecompileResult};
 use sp_core::U256;
 use sp_runtime::traits::UniqueSaturatedInto;
 
@@ -54,10 +54,38 @@ impl StakingPrecompile {
             id if id == get_method_id("removeStake(bytes32,uint256,uint16)") => {
                 Self::remove_stake(handle, &method_input)
             }
+            id if id == get_method_id("getStake(bytes32,bytes32,uint16)") => {
+                Self::get_stake(&method_input)
+            }
             _ => Err(PrecompileFailure::Error {
                 exit_status: ExitError::InvalidRange,
             }),
         }
+    }
+    fn get_stake(data: &[u8]) -> PrecompileResult {
+        let mut coldkey = [0u8; 32];
+        coldkey.copy_from_slice(get_slice(data, 0, 32)?);
+
+        let mut hotkey = [0u8; 32];
+        hotkey.copy_from_slice(get_slice(data, 32, 64)?);
+
+		let coldkey = coldkey.into();
+		let hotkey = hotkey.into();
+
+        let stake = pallet_subtensor::Pallet::<Runtime>::get_stake_for_coldkey_and_hotkey(&coldkey, &hotkey);
+
+        let result_u256 = U256::from(stake);
+        let amount_sub =
+            <Runtime as pallet_evm::Config>::BalanceConverter::into_evm_balance(result_u256)
+                .ok_or(ExitError::OutOfFund)?;
+
+        let mut result = [0_u8; 32];
+        U256::to_big_endian(&amount_sub, &mut result);
+
+        Ok(PrecompileOutput {
+            exit_status: ExitSucceed::Returned,
+            output: result.into(),
+        })
     }
 
     fn add_stake(handle: &mut impl PrecompileHandle, data: &[u8]) -> PrecompileResult {
@@ -106,4 +134,5 @@ impl StakingPrecompile {
         hotkey.copy_from_slice(get_slice(data, 0, 32)?);
         Ok(hotkey)
     }
+
 }

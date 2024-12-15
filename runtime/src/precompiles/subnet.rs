@@ -1,8 +1,10 @@
 use crate::precompiles::{dispatch, get_method_id, get_slice};
 use crate::{ Runtime, RuntimeCall};
-use pallet_evm::{AddressMapping, ExitError, PrecompileFailure, PrecompileHandle, PrecompileResult, HashedAddressMapping };
+use pallet_evm::{AddressMapping, ExitError, ExitSucceed, PrecompileFailure, PrecompileOutput, PrecompileHandle, PrecompileResult, HashedAddressMapping };
 use sp_std::vec;
 use sp_runtime::AccountId32;
+use sp_core::{ U256};
+
 use sp_runtime::traits::BlakeTwo256;
 
 pub const SUBNET_PRECOMPILE_INDEX: u64 = 2051;
@@ -38,6 +40,9 @@ impl SubnetPrecompile {
             id if id == get_method_id("registerNetwork()") => {
                 Self::register_network(handle, &[0_u8; 0])
             }
+            id if id == get_method_id("getTempo(uint16)") => {
+                Self::get_tempo(&method_input)
+            }
             _ => Err(PrecompileFailure::Error {
                 exit_status: ExitError::InvalidRange,
             }),
@@ -58,6 +63,18 @@ impl SubnetPrecompile {
 
         // Dispatch the register_network call
         dispatch(handle, call, STAKING_CONTRACT_ADDRESS)
+	}
+
+	fn get_tempo(data: &[u8]) -> PrecompileResult {
+		let netuid = Self::parse_netuid(data)?;
+		let tempo = pallet_subtensor::Pallet::<Runtime>::get_tempo(netuid);
+        let result_u256 = U256::from(tempo);
+        let mut result = [0_u8; 32];
+        U256::to_big_endian(&result_u256, &mut result);
+        Ok(PrecompileOutput {
+            exit_status: ExitSucceed::Returned,
+            output: result.into(),
+        })
 	}
 
     fn parse_netuid(data: &[u8]) -> Result<u16, PrecompileFailure> {
