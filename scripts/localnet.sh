@@ -3,10 +3,10 @@
 # Check if `--no-purge` passed as a parameter
 NO_PURGE=0
 for arg in "$@"; do
-    if [ "$arg" = "--no-purge" ]; then
-        NO_PURGE=1
-        break
-    fi
+  if [ "$arg" = "--no-purge" ]; then
+    NO_PURGE=1
+    break
+  fi
 done
 
 # Determine the directory this script resides in. This allows invoking it from any location.
@@ -25,13 +25,13 @@ if [ "$fast_blocks" == "False" ]; then
   echo "fast_blocks is Off"
   : "${CHAIN:=local}"
   : "${BUILD_BINARY:=1}"
-  : "${FEATURES:="pow-faucet runtime-benchmarks"}"
+  : "${FEATURES:="pow-faucet"}"
 else
   # Block of code to execute if fast_blocks is not False
   echo "fast_blocks is On"
   : "${CHAIN:=local}"
   : "${BUILD_BINARY:=1}"
-  : "${FEATURES:="pow-faucet runtime-benchmarks fast-blocks"}"
+  : "${FEATURES:="pow-faucet fast-blocks"}"
 fi
 
 SPEC_PATH="${SCRIPT_DIR}/specs/"
@@ -56,6 +56,10 @@ echo "*** Building chainspec..."
 "$BASE_DIR/target/release/node-subtensor" build-spec --disable-default-bootnode --raw --chain $CHAIN >$FULL_PATH
 echo "*** Chainspec built and output to file"
 
+# generate node keys
+$BASE_DIR/target/release/node-subtensor key generate-node-key --chain="$FULL_PATH" --base-path /tmp/alice
+$BASE_DIR/target/release/node-subtensor key generate-node-key --chain="$FULL_PATH" --base-path /tmp/bob
+
 if [ $NO_PURGE -eq 1 ]; then
   echo "*** Purging previous state skipped..."
 else
@@ -72,11 +76,12 @@ alice_start=(
   --chain="$FULL_PATH"
   --alice
   --port 30334
-  --rpc-port 9946
+  --rpc-port 9944
   --validator
   --rpc-cors=all
   --allow-private-ipv4
   --discover-local
+  --unsafe-force-node-key-generation
 )
 
 bob_start=(
@@ -87,8 +92,11 @@ bob_start=(
   --port 30335
   --rpc-port 9945
   --validator
+  --rpc-cors=all
   --allow-private-ipv4
   --discover-local
+  --unsafe-force-node-key-generation
+#  --offchain-worker=Never
 )
 
 trap 'pkill -P $$' EXIT SIGINT SIGTERM

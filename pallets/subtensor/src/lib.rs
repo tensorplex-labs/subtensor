@@ -48,8 +48,13 @@ pub mod utils;
 use crate::utils::rate_limiting::TransactionType;
 use macros::{config, dispatches, errors, events, genesis, hooks};
 
+#[cfg(test)]
+mod tests;
+
 // apparently this is stabilized since rust 1.36
 extern crate alloc;
+
+pub const MAX_CRV3_COMMIT_SIZE_BYTES: u32 = 5000;
 
 #[deny(missing_docs)]
 #[import_section(errors::errors)]
@@ -67,12 +72,16 @@ pub mod pallet {
         traits::{
             tokens::fungible, OriginTrait, QueryPreimage, StorePreimage, UnfilteredDispatchable,
         },
+        BoundedVec,
     };
     use frame_system::pallet_prelude::*;
-    use sp_core::H256;
+    use pallet_drand::types::RoundNumber;
+    use sp_core::{ConstU32, H256};
     use sp_runtime::traits::{Dispatchable, TrailingZeroInput};
+    use sp_std::collections::vec_deque::VecDeque;
     use sp_std::vec;
     use sp_std::vec::Vec;
+    use subtensor_macros::freeze_struct;
 
     #[cfg(not(feature = "std"))]
     use alloc::boxed::Box;
@@ -127,6 +136,36 @@ pub mod pallet {
         pub placeholder1: u8,
         ///  Axon proto placeholder 2.
         pub placeholder2: u8,
+    }
+
+    /// Struct for NeuronCertificate.
+    pub type NeuronCertificateOf = NeuronCertificate;
+    /// Data structure for NeuronCertificate information.
+    #[freeze_struct("1c232be200d9ec6c")]
+    #[derive(Decode, Encode, Default, TypeInfo, PartialEq, Eq, Clone, Debug)]
+    pub struct NeuronCertificate {
+        ///  The neuron TLS public key
+        pub public_key: BoundedVec<u8, ConstU32<64>>,
+        ///  The algorithm used to generate the public key
+        pub algorithm: u8,
+    }
+
+    impl TryFrom<Vec<u8>> for NeuronCertificate {
+        type Error = ();
+
+        fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
+            if value.len() > 65 {
+                return Err(());
+            }
+            // take the first byte as the algorithm
+            let algorithm = value.first().ok_or(())?;
+            // and the rest as the public_key
+            let certificate = value.get(1..).ok_or(())?.to_vec();
+            Ok(Self {
+                public_key: BoundedVec::try_from(certificate).map_err(|_| ())?,
+                algorithm: *algorithm,
+            })
+        }
     }
 
     ///  Struct for Prometheus.
@@ -226,6 +265,11 @@ pub mod pallet {
         0
     }
     #[pallet::type_value]
+    /// Default stake delta.
+    pub fn DefaultStakeDelta<T: Config>() -> i128 {
+        0
+    }
+    #[pallet::type_value]
     /// Default stakes per interval.
     pub fn DefaultStakesPerInterval<T: Config>() -> (u64, u64) {
         (0, 0)
@@ -265,6 +309,11 @@ pub mod pallet {
     /// Default account linkage
     pub fn DefaultAccountLinkage<T: Config>() -> Vec<(u64, T::AccountId)> {
         vec![]
+    }
+    #[pallet::type_value]
+    /// Default pending childkeys
+    pub fn DefaultPendingChildkeys<T: Config>() -> (Vec<(u64, T::AccountId)>, u64) {
+        (vec![], 0)
     }
     #[pallet::type_value]
     /// Default account linkage
@@ -532,8 +581,13 @@ pub mod pallet {
     }
     #[pallet::type_value]
     /// Default minimum stake for weights.
-    pub fn DefaultWeightsMinStake<T: Config>() -> u64 {
+    pub fn DefaultStakeThreshold<T: Config>() -> u64 {
         0
+    }
+    #[pallet::type_value]
+    /// Default Reveal Period Epochs
+    pub fn DefaultRevealPeriodEpochs<T: Config>() -> u64 {
+        1
     }
     #[pallet::type_value]
     /// Value definition for vector of u16.
@@ -597,11 +651,6 @@ pub mod pallet {
         T::InitialServingRateLimit::get()
     }
     #[pallet::type_value]
-    /// Default value for weight commit reveal interval.
-    pub fn DefaultWeightCommitRevealInterval<T: Config>() -> u64 {
-        1000
-    }
-    #[pallet::type_value]
     /// Default value for weight commit/reveal enabled.
     pub fn DefaultCommitRevealWeightsEnabled<T: Config>() -> bool {
         false
@@ -631,6 +680,18 @@ pub mod pallet {
     /// Default value for coldkey swap schedule duration
     pub fn DefaultColdkeySwapScheduleDuration<T: Config>() -> BlockNumberFor<T> {
         T::InitialColdkeySwapScheduleDuration::get()
+    }
+
+    #[pallet::type_value]
+    /// Default value for applying pending items (e.g. childkeys).
+    pub fn DefaultPendingCooldown<T: Config>() -> u64 {
+        7200
+    }
+
+    #[pallet::type_value]
+    /// Default minimum stake for setting childkeys.
+    pub fn DefaultChildkeysMinStake<T: Config>() -> u64 {
+        1_000_000_000_000
     }
 
     #[pallet::storage]
@@ -758,16 +819,38 @@ pub mod pallet {
         DefaultAccumulatedEmission<T>,
     >;
     #[pallet::storage]
-    /// Map ( hot, cold ) --> block_number | Last add stake increase.
-    pub type LastAddStakeIncrease<T: Config> = StorageDoubleMap<
+    /// Map ( hot ) --> emission | Part of accumulated hotkey emission that will not be distributed to nominators.
+    pub type PendingdHotkeyEmissionUntouchable<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        T::AccountId,
+        u64,
+        ValueQuery,
+        DefaultAccumulatedEmission<T>,
+    >;
+    #[pallet::storage]
+    /// Map ( hot, cold ) --> stake: i128 | Stake added/removed since last emission drain.
+    pub type StakeDeltaSinceLastEmissionDrain<T: Config> = StorageDoubleMap<
         _,
         Blake2_128Concat,
         T::AccountId,
         Identity,
         T::AccountId,
-        u64,
+        i128,
         ValueQuery,
-        DefaultAccountTake<T>,
+        DefaultStakeDelta<T>,
+    >;
+    #[pallet::storage]
+    /// DMAP ( netuid, parent ) --> (Vec<(proportion,child)>, cool_down_block)
+    pub type PendingChildKeys<T: Config> = StorageDoubleMap<
+        _,
+        Identity,
+        u16,
+        Blake2_128Concat,
+        T::AccountId,
+        (Vec<(u64, T::AccountId)>, u64),
+        ValueQuery,
+        DefaultPendingChildkeys<T>,
     >;
     #[pallet::storage]
     /// DMAP ( parent, netuid ) --> Vec<(proportion,child)>
@@ -978,8 +1061,8 @@ pub mod pallet {
     /// --- MAP ( netuid ) --> bonds_moving_average
     pub type BondsMovingAverage<T> =
         StorageMap<_, Identity, u16, u64, ValueQuery, DefaultBondsMovingAverage<T>>;
-    #[pallet::storage]
     /// --- MAP ( netuid ) --> weights_set_rate_limit
+    #[pallet::storage]
     pub type WeightsSetRateLimit<T> =
         StorageMap<_, Identity, u16, u64, ValueQuery, DefaultWeightsSetRateLimit<T>>;
     #[pallet::storage]
@@ -999,11 +1082,7 @@ pub mod pallet {
     pub type AdjustmentAlpha<T: Config> =
         StorageMap<_, Identity, u16, u64, ValueQuery, DefaultAdjustmentAlpha<T>>;
     #[pallet::storage]
-    /// --- MAP ( netuid ) --> interval
-    pub type WeightCommitRevealInterval<T> =
-        StorageMap<_, Identity, u16, u64, ValueQuery, DefaultWeightCommitRevealInterval<T>>;
-    #[pallet::storage]
-    /// --- MAP ( netuid ) --> interval
+    /// --- MAP ( netuid ) --> commit reveal v2 weights are enabled
     pub type CommitRevealWeightsEnabled<T> =
         StorageMap<_, Identity, u16, bool, ValueQuery, DefaultCommitRevealWeightsEnabled<T>>;
     #[pallet::storage]
@@ -1162,6 +1241,17 @@ pub mod pallet {
     /// --- MAP ( netuid, hotkey ) --> axon_info
     pub type Axons<T: Config> =
         StorageDoubleMap<_, Identity, u16, Blake2_128Concat, T::AccountId, AxonInfoOf, OptionQuery>;
+    /// --- MAP ( netuid, hotkey ) --> certificate
+    #[pallet::storage]
+    pub type NeuronCertificates<T: Config> = StorageDoubleMap<
+        _,
+        Identity,
+        u16,
+        Blake2_128Concat,
+        T::AccountId,
+        NeuronCertificateOf,
+        OptionQuery,
+    >;
     #[pallet::storage]
     /// --- MAP ( netuid, hotkey ) --> prometheus_info
     pub type Prometheus<T: Config> = StorageDoubleMap<
@@ -1209,18 +1299,37 @@ pub mod pallet {
         StorageMap<_, Identity, T::AccountId, u64, ValueQuery, DefaultLastTxBlock<T>>;
     #[pallet::storage]
     /// ITEM( weights_min_stake )
-    pub type WeightsMinStake<T> = StorageValue<_, u64, ValueQuery, DefaultWeightsMinStake<T>>;
+    pub type StakeThreshold<T> = StorageValue<_, u64, ValueQuery, DefaultStakeThreshold<T>>;
     #[pallet::storage]
-    /// --- MAP (netuid, who) --> (hash, weight) | Returns the hash and weight committed by an account for a given netuid.
+    /// --- MAP (netuid, who) --> VecDeque<(hash, commit_block, first_reveal_block, last_reveal_block)> | Stores a queue of commits for an account on a given netuid.
     pub type WeightCommits<T: Config> = StorageDoubleMap<
         _,
         Twox64Concat,
         u16,
         Twox64Concat,
         T::AccountId,
-        (H256, u64),
+        VecDeque<(H256, u64, u64, u64)>,
         OptionQuery,
     >;
+    #[pallet::storage]
+    /// --- MAP (netuid, commit_epoch) --> VecDeque<(who, serialized_compressed_commit, reveal_round)> | Stores a queue of v3 commits for an account on a given netuid.
+    pub type CRV3WeightCommits<T: Config> = StorageDoubleMap<
+        _,
+        Twox64Concat,
+        u16,
+        Twox64Concat,
+        u64,
+        VecDeque<(
+            T::AccountId,
+            BoundedVec<u8, ConstU32<MAX_CRV3_COMMIT_SIZE_BYTES>>,
+            RoundNumber,
+        )>,
+        ValueQuery,
+    >;
+    #[pallet::storage]
+    /// --- Map (netuid) --> Number of epochs allowed for commit reveal periods
+    pub type RevealPeriodEpochs<T: Config> =
+        StorageMap<_, Twox64Concat, u16, u64, ValueQuery, DefaultRevealPeriodEpochs<T>>;
 
     /// ==================
     /// ==== Genesis =====
@@ -1250,7 +1359,7 @@ pub mod pallet {
         /// Returns the transaction priority for setting weights.
         pub fn get_priority_set_weights(hotkey: &T::AccountId, netuid: u16) -> u64 {
             if let Ok(uid) = Self::get_uid_for_net_and_hotkey(netuid, hotkey) {
-                let _stake = Self::get_total_stake_for_hotkey(hotkey);
+                let _stake = Self::get_stake_for_hotkey_on_subnet(hotkey, netuid);
                 let current_block_number: u64 = Self::get_current_block_as_u64();
                 let default_priority: u64 =
                     current_block_number.saturating_sub(Self::get_last_update_for_uid(netuid, uid));
@@ -1260,9 +1369,9 @@ pub mod pallet {
         }
 
         /// Is the caller allowed to set weights
-        pub fn check_weights_min_stake(hotkey: &T::AccountId) -> bool {
+        pub fn check_weights_min_stake(hotkey: &T::AccountId, netuid: u16) -> bool {
             // Blacklist weights transactions for low stake peers.
-            Self::get_total_stake_for_hotkey(hotkey) >= Self::get_weights_min_stake()
+            Self::get_stake_for_hotkey_on_subnet(hotkey, netuid) >= Self::get_stake_threshold()
         }
 
         /// Helper function to check if register is allowed
@@ -1355,8 +1464,8 @@ where
         Pallet::<T>::get_priority_set_weights(who, netuid)
     }
 
-    pub fn check_weights_min_stake(who: &T::AccountId) -> bool {
-        Pallet::<T>::check_weights_min_stake(who)
+    pub fn check_weights_min_stake(who: &T::AccountId, netuid: u16) -> bool {
+        Pallet::<T>::check_weights_min_stake(who, netuid)
     }
 }
 
@@ -1394,7 +1503,7 @@ where
     ) -> TransactionValidity {
         match call.is_sub_type() {
             Some(Call::commit_weights { netuid, .. }) => {
-                if Self::check_weights_min_stake(who) {
+                if Self::check_weights_min_stake(who, *netuid) {
                     let priority: u64 = Self::get_priority_set_weights(who, *netuid);
                     Ok(ValidTransaction {
                         priority,
@@ -1406,7 +1515,7 @@ where
                 }
             }
             Some(Call::reveal_weights { netuid, .. }) => {
-                if Self::check_weights_min_stake(who) {
+                if Self::check_weights_min_stake(who, *netuid) {
                     let priority: u64 = Self::get_priority_set_weights(who, *netuid);
                     Ok(ValidTransaction {
                         priority,
@@ -1417,8 +1526,20 @@ where
                     Err(InvalidTransaction::Custom(2).into())
                 }
             }
+            Some(Call::batch_reveal_weights { netuid, .. }) => {
+                if Self::check_weights_min_stake(who, *netuid) {
+                    let priority: u64 = Self::get_priority_set_weights(who, *netuid);
+                    Ok(ValidTransaction {
+                        priority,
+                        longevity: 1,
+                        ..Default::default()
+                    })
+                } else {
+                    Err(InvalidTransaction::Custom(6).into())
+                }
+            }
             Some(Call::set_weights { netuid, .. }) => {
-                if Self::check_weights_min_stake(who) {
+                if Self::check_weights_min_stake(who, *netuid) {
                     let priority: u64 = Self::get_priority_set_weights(who, *netuid);
                     Ok(ValidTransaction {
                         priority,
@@ -1430,7 +1551,7 @@ where
                 }
             }
             Some(Call::set_root_weights { netuid, hotkey, .. }) => {
-                if Self::check_weights_min_stake(hotkey) {
+                if Self::check_weights_min_stake(hotkey, *netuid) {
                     let priority: u64 = Self::get_priority_set_weights(hotkey, *netuid);
                     Ok(ValidTransaction {
                         priority,
@@ -1439,6 +1560,18 @@ where
                     })
                 } else {
                     Err(InvalidTransaction::Custom(4).into())
+                }
+            }
+            Some(Call::commit_crv3_weights { netuid, .. }) => {
+                if Self::check_weights_min_stake(who, *netuid) {
+                    let priority: u64 = Self::get_priority_set_weights(who, *netuid);
+                    Ok(ValidTransaction {
+                        priority,
+                        longevity: 1,
+                        ..Default::default()
+                    })
+                } else {
+                    Err(InvalidTransaction::Custom(7).into())
                 }
             }
             Some(Call::add_stake { .. }) => Ok(ValidTransaction {
@@ -1535,6 +1668,10 @@ where
                 Ok((CallType::Register, transaction_fee, who.clone()))
             }
             Some(Call::serve_axon { .. }) => {
+                let transaction_fee = 0;
+                Ok((CallType::Serve, transaction_fee, who.clone()))
+            }
+            Some(Call::serve_axon_tls { .. }) => {
                 let transaction_fee = 0;
                 Ok((CallType::Serve, transaction_fee, who.clone()))
             }

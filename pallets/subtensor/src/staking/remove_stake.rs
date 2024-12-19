@@ -76,6 +76,11 @@ impl<T: Config> Pallet<T> {
         // We remove the balance from the hotkey.
         Self::decrease_stake_on_coldkey_hotkey_account(&coldkey, &hotkey, stake_to_be_removed);
 
+        // Track this removal in the stake delta.
+        StakeDeltaSinceLastEmissionDrain::<T>::mutate(&hotkey, &coldkey, |stake_delta| {
+            *stake_delta = stake_delta.saturating_sub_unsigned(stake_to_be_removed as u128);
+        });
+
         // We add the balance to the coldkey.  If the above fails we will not credit this coldkey.
         Self::add_balance_to_coldkey_account(&coldkey, stake_to_be_removed);
 
@@ -84,6 +89,13 @@ impl<T: Config> Pallet<T> {
         // If the coldkey does not own the hotkey, it's a nominator stake.
         let new_stake = Self::get_stake_for_coldkey_and_hotkey(&coldkey, &hotkey);
         Self::clear_small_nomination_if_required(&hotkey, &coldkey, new_stake);
+
+        // Check if stake lowered below MinStake and remove Pending children if it did
+        if Self::get_total_stake_for_hotkey(&hotkey) < StakeThreshold::<T>::get() {
+            Self::get_all_subnet_netuids().iter().for_each(|netuid| {
+                PendingChildKeys::<T>::remove(netuid, &hotkey);
+            })
+        }
 
         // Set last block for rate limiting
         let block: u64 = Self::get_current_block_as_u64();
