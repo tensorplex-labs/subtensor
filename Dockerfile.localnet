@@ -4,7 +4,7 @@ SHELL ["/bin/bash", "-c"]
 
 WORKDIR /
 RUN apt update
-RUN apt install --assume-yes make build-essential git clang curl libssl-dev llvm libudev-dev protobuf-compiler
+RUN apt install --assume-yes make build-essential git clang curl libssl-dev llvm libudev-dev protobuf-compiler pkg-config
 
 # Install Rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
