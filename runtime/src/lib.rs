@@ -1834,7 +1834,7 @@ impl_runtime_apis! {
                 access_list.unwrap_or_default(),
                 whitelist,
                 false,
-                false,
+                true,
                 weight_limit,
                 proof_size_base_cost,
                 config.as_ref().unwrap_or(<Runtime as pallet_evm::Config>::config()),
