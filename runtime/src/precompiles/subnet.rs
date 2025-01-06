@@ -1,19 +1,14 @@
 use crate::precompiles::{dispatch, get_method_id, get_slice};
-use crate::{ Runtime, RuntimeCall};
-use pallet_evm::{AddressMapping, ExitError, ExitSucceed, PrecompileFailure, PrecompileOutput, PrecompileHandle, PrecompileResult, HashedAddressMapping };
+use crate::{Runtime, RuntimeCall};
+use pallet_evm::{ExitError, PrecompileFailure, PrecompileHandle, PrecompileResult};
 use sp_std::vec;
-use sp_runtime::AccountId32;
-use sp_core::{ U256};
 
-use sp_runtime::traits::BlakeTwo256;
-
-pub const SUBNET_PRECOMPILE_INDEX: u64 = 2052;
+pub const SUBNET_PRECOMPILE_INDEX: u64 = 2051;
 // three bytes with max lenght 1K
 pub const MAX_PARAMETER_SIZE: usize = 3 * 1024;
 
-// this is subnets smart contract's(0x0000000000000000000000000000000000000804) sr25519 address
-pub const SUBNETS_CONTRACT_ADDRESS: &str = "5GKZiUUgTnWSz3BgiVBMehEKkLszsG4ZXnvgWpWFUFKqrqyn";
-
+// this is staking smart contract's(0x0000000000000000000000000000000000000803) sr25519 address
+pub const STAKING_CONTRACT_ADDRESS: &str = "5DPSUCb5mZFfizvBDSnRoAqmxV5Bmov2CS3xV773qU6VP1w2";
 
 pub struct SubnetPrecompile;
 
@@ -35,71 +30,14 @@ impl SubnetPrecompile {
             id if id == get_method_id("registerNetwork(bytes,bytes,bytes)") => {
                 Self::register_network(handle, &method_input)
             }
-			id if id == get_method_id("burnedRegister(uint16,bytes)") => {
-                Self::burned_register(handle, &method_input)
-            }
             id if id == get_method_id("registerNetwork()") => {
                 Self::register_network(handle, &[0_u8; 0])
-            }
-            id if id == get_method_id("getTempo(uint16)") => {
-                Self::get_tempo(&method_input)
             }
             _ => Err(PrecompileFailure::Error {
                 exit_status: ExitError::InvalidRange,
             }),
         }
     }
-
-    pub fn burned_register(handle: &mut impl PrecompileHandle, data: &[u8]) -> PrecompileResult {
-        let (netuid, hotkey) = Self::parse_netuid_hotkey_parameter(data)?;
-        let call =
-            RuntimeCall::SubtensorModule(pallet_subtensor::Call::<Runtime>::burned_register {
-                netuid,
-                hotkey: hotkey.into(),
-            });
-        dispatch(handle, call, SUBNETS_CONTRACT_ADDRESS)
-    }
-
-    fn parse_netuid_hotkey_parameter(data: &[u8]) -> Result<(u16, [u8; 32]), PrecompileFailure> {
-        if data.len() < 64 {
-            return Err(PrecompileFailure::Error {
-                exit_status: ExitError::InvalidRange,
-            });
-        }
-        let mut netuid_vec = [0u8; 2];
-        netuid_vec.copy_from_slice(get_slice(data, 30, 32)?);
-        let netuid = u16::from_be_bytes(netuid_vec);
-
-        let mut parameter = [0u8; 32];
-        parameter.copy_from_slice(get_slice(data, 32, 64)?);
-
-        Ok((netuid, parameter))
-    }
-
-	fn get_tempo(data: &[u8]) -> PrecompileResult {
-		let netuid = Self::parse_netuid(data)?;
-		let tempo = pallet_subtensor::Pallet::<Runtime>::get_tempo(netuid);
-        let result_u256 = U256::from(tempo);
-        let mut result = [0_u8; 32];
-        U256::to_big_endian(&result_u256, &mut result);
-        Ok(PrecompileOutput {
-            exit_status: ExitSucceed::Returned,
-            output: result.into(),
-        })
-	}
-
-    fn parse_netuid(data: &[u8]) -> Result<u16, PrecompileFailure> {
-        if data.len() < 32 {
-            return Err(PrecompileFailure::Error {
-                exit_status: ExitError::InvalidRange,
-            });
-        }
-        let mut netuid = [0u8; 2];
-        netuid.copy_from_slice(get_slice(data, 30, 32)?);
-        let result = u16::from_be_bytes(netuid);
-        Ok(result)
-    }
-
 
     fn register_network(handle: &mut impl PrecompileHandle, data: &[u8]) -> PrecompileResult {
         let call = if data.is_empty() {
@@ -127,7 +65,7 @@ impl SubnetPrecompile {
         };
 
         // Dispatch the register_network call
-        dispatch(handle, call, SUBNETS_CONTRACT_ADDRESS)
+        dispatch(handle, call, STAKING_CONTRACT_ADDRESS)
     }
 
     fn parse_register_network_parameters(
