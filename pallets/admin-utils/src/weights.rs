@@ -42,6 +42,7 @@ pub trait WeightInfo {
 	fn sudo_set_weights_set_rate_limit() -> Weight;
 	fn sudo_set_weights_version_key() -> Weight;
 	fn sudo_set_bonds_moving_average() -> Weight;
+	fn sudo_set_bonds_penalty() -> Weight;
 	fn sudo_set_max_allowed_validators() -> Weight;
 	fn sudo_set_difficulty() -> Weight;
 	fn sudo_set_adjustment_interval() -> Weight;
@@ -63,6 +64,7 @@ pub trait WeightInfo {
 	fn sudo_set_commit_reveal_weights_interval() -> Weight;
 	fn sudo_set_commit_reveal_weights_enabled() -> Weight;
 	fn sudo_set_evm_chain_id() -> Weight;
+	fn schedule_grandpa_change(a: u32) -> Weight;
 }
 
 /// Weights for `pallet_admin_utils` using the Substrate node and recommended hardware.
@@ -171,6 +173,19 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 	/// Storage: SubtensorModule BondsMovingAverage (r:0 w:1)
 	/// Proof Skipped: SubtensorModule BondsMovingAverage (max_values: None, max_size: None, mode: Measured)
 	fn sudo_set_bonds_moving_average() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `1111`
+		//  Estimated: `4697`
+		// Minimum execution time: 46_099_000 picoseconds.
+		Weight::from_parts(47_510_000, 4697)
+			.saturating_add(T::DbWeight::get().reads(1_u64))
+			.saturating_add(T::DbWeight::get().writes(1_u64))
+	}
+	/// Storage: SubtensorModule NetworksAdded (r:1 w:0)
+	/// Proof Skipped: SubtensorModule NetworksAdded (max_values: None, max_size: None, mode: Measured)
+	/// Storage: SubtensorModule BondsPenalty (r:0 w:1)
+	/// Proof Skipped: SubtensorModule BondsPenalty (max_values: None, max_size: None, mode: Measured)
+	fn sudo_set_bonds_penalty() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `1111`
 		//  Estimated: `4697`
@@ -436,6 +451,11 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		Weight::from_parts(20_200_000, 0)
 			.saturating_add(RocksDbWeight::get().writes(1_u64))
 	}
+
+	fn schedule_grandpa_change(_a: u32) -> Weight {
+		// TODO should be replaced by benchmarked weights
+		Weight::default()
+	}
 }
 
 // For backwards compatibility and tests.
@@ -543,6 +563,19 @@ impl WeightInfo for () {
 	/// Storage: SubtensorModule BondsMovingAverage (r:0 w:1)
 	/// Proof Skipped: SubtensorModule BondsMovingAverage (max_values: None, max_size: None, mode: Measured)
 	fn sudo_set_bonds_moving_average() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `1111`
+		//  Estimated: `4697`
+		// Minimum execution time: 46_099_000 picoseconds.
+		Weight::from_parts(47_510_000, 4697)
+			.saturating_add(RocksDbWeight::get().reads(1_u64))
+			.saturating_add(RocksDbWeight::get().writes(1_u64))
+	}
+	/// Storage: SubtensorModule NetworksAdded (r:1 w:0)
+	/// Proof Skipped: SubtensorModule NetworksAdded (max_values: None, max_size: None, mode: Measured)
+	/// Storage: SubtensorModule BondsPenalty (r:0 w:1)
+	/// Proof Skipped: SubtensorModule BondsPenalty (max_values: None, max_size: None, mode: Measured)
+	fn sudo_set_bonds_penalty() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `1111`
 		//  Estimated: `4697`
@@ -813,5 +846,9 @@ impl WeightInfo for () {
 	fn sudo_set_evm_chain_id() -> Weight {
 		Weight::from_parts(20_200_000, 0)
 			.saturating_add(RocksDbWeight::get().writes(1_u64))
+	}
+	fn schedule_grandpa_change(_a: u32) -> Weight {
+		// TODO should be replaced by benchmarked weights
+		Weight::default()
 	}
 }

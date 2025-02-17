@@ -549,7 +549,8 @@ pub mod pallet {
             );
 
             let threshold = T::GetVotingMembers::get_count()
-                .saturating_div(2)
+                .checked_div(2)
+                .unwrap_or(0)
                 .saturating_add(1);
 
             let members = Self::members();
@@ -665,7 +666,7 @@ pub mod pallet {
             proposal_weight_bound: Weight,
             #[pallet::compact] length_bound: u32,
         ) -> DispatchResultWithPostInfo {
-            let _ = ensure_signed(origin)?;
+            ensure_root(origin)?;
 
             Self::do_close(proposal_hash, index, proposal_weight_bound, length_bound)
         }
